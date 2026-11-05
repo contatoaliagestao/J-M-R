@@ -477,7 +477,7 @@ company.get('/contracts', async c => {
   return c.json({ contracts: rows.map(x => contractView(x, today)), today });
 });
 
-company.post('/contracts', managerOnly, async c => {
+company.post('/contracts', async c => { // Gestor e Operador podem lançar empréstimos
   const db = c.get('db');
   const user = c.get('user');
   const cid = c.get('company').id;

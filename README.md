@@ -12,7 +12,7 @@ Sistema web para gestão de **empréstimos, cobrança e conciliação bancária*
   |---|---|
   | **Administrador** | Tudo, em todas as empresas, além de cadastrar empresas e usuários |
   | **Gestor** | Dashboard, contratos, novos empréstimos, baixas, cobrança e conciliação nas empresas liberadas |
-  | **Operador** | Consulta de contratos, painel de cobrança e registro de ocorrências nas empresas liberadas |
+  | **Operador** | Lançamento de novos empréstimos, consulta de contratos, painel de cobrança e registro de ocorrências nas empresas liberadas (sem baixas, dashboard ou conciliação) |
 - **Contratos:** cadastro do cliente (CPF, WhatsApp, endereço, rede social), valor, taxa de juros, diária de atraso e ciclo (15 ou 30 dias).
 - **Baixa manual:** rolagem (paga juros + diárias, vencimento avança 1 ciclo) ou quitação total.
 - **Cobrança:** lista de atrasados, texto de cobrança pronto para copiar e atalho para o WhatsApp.

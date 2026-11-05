@@ -125,7 +125,10 @@ test('permissões: operador e gestor só veem as empresas liberadas', async () =
   // Operador não acessa dashboard, conciliação, nem lança empréstimo
   assert.strictEqual((await operador('GET', `/api/companies/${empresa1}/dashboard`)).status, 403);
   assert.strictEqual((await operador('GET', `/api/companies/${empresa1}/bank`)).status, 403);
-  assert.strictEqual((await operador('POST', `/api/companies/${empresa1}/contracts`, {})).status, 403);
+  // Operador pode lançar empréstimo (aqui sem dados, então o servidor recusa por validação, não por permissão)
+  assert.strictEqual((await operador('POST', `/api/companies/${empresa1}/contracts`, {})).status, 400);
+  // ...mas não pode lançar em empresa que não é dele
+  assert.strictEqual((await operador('POST', `/api/companies/${empresa2}/contracts`, {})).status, 403);
   // Nem gerencia usuários/empresas
   assert.strictEqual((await operador('GET', '/api/users')).status, 403);
   assert.strictEqual((await gestor('POST', '/api/companies', { official_name: 'X', short_name: 'X' })).status, 403);
@@ -144,6 +147,12 @@ test('fluxo de contrato: concessão, rolagem, ocorrência e quitação', async (
   assert.strictEqual(c.debt.overdueDays, 4);
   assert.strictEqual(c.debt.totalToRollover, 136000);
 
+  // Operador lança empréstimo
+  const opLoan = await operador('POST', `/api/companies/${empresa1}/contracts`, {
+    client_name: 'Cliente do Operador', cpf: '999', phone: '11977776666', address: 'Rua O', principal: 300, rate: 20, cycle_days: 15,
+  });
+  assert.strictEqual(opLoan.status, 201);
+
   // Operador registra ocorrência, mas não dá baixa
   assert.strictEqual((await operador('POST', `/api/companies/${empresa1}/contracts/${c.id}/occurrences`, { text: 'Liguei, paga amanhã.' })).status, 201);
   assert.strictEqual((await operador('POST', `/api/companies/${empresa1}/contracts/${c.id}/rollover`, { channel: 'DINHEIRO' })).status, 403);
@@ -154,7 +163,7 @@ test('fluxo de contrato: concessão, rolagem, ocorrência e quitação', async (
 
   const dash = await admin('GET', `/api/companies/${empresa1}/dashboard`);
   assert.strictEqual(dash.data.dashboard.receita_realizada_cents, 136000);
-  assert.strictEqual(dash.data.dashboard.capital_alocado_cents, 200000);
+  assert.strictEqual(dash.data.dashboard.capital_alocado_cents, 200000 + 30000); // + empréstimo do operador
   assert.strictEqual(dash.data.dashboard.em_atraso, 0);
 
   const settle = await admin('POST', `/api/companies/${empresa1}/contracts/${c.id}/settle`, { channel: 'PIX_MANUAL' });
@@ -163,7 +172,7 @@ test('fluxo de contrato: concessão, rolagem, ocorrência e quitação', async (
 
   const dash2 = await admin('GET', `/api/companies/${empresa1}/dashboard`);
   assert.strictEqual(dash2.data.dashboard.receita_realizada_cents, 136000 + 40000); // + juros da quitação
-  assert.strictEqual(dash2.data.dashboard.contratos_ativos, 0);
+  assert.strictEqual(dash2.data.dashboard.contratos_ativos, 1); // resta o empréstimo do operador
 
   const dossier = await operador('GET', `/api/companies/${empresa1}/contracts/${c.id}`);
   assert.strictEqual(dossier.data.contract.status, 'QUITADO');

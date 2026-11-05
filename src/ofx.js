@@ -1,17 +1,25 @@
-'use strict';
-
-const crypto = require('crypto');
-const { calculateDebt } = require('./finance');
+import { calculateDebt } from './finance.js';
 
 // Lê um campo de um bloco OFX. Funciona tanto no formato SGML (OFX 1.x, sem tag de fechamento)
 // quanto no XML (OFX 2.x).
+// Hash simples e estável (FNV-1a, 2 × 32 bits) para gerar um identificador quando o banco não envia FITID
+function stableHash(text) {
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x5bd1e995) >>> 0;
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+}
+
 function readTag(block, tag) {
   const re = new RegExp(`<${tag}>([^<\\r\\n]*)`, 'i');
   const m = block.match(re);
   return m ? m[1].trim() : '';
 }
 
-function parseAmountToCents(raw) {
+export function parseAmountToCents(raw) {
   let s = String(raw).trim();
   if (!s) return null;
   // Aceita "1234.56", "-1234,56" e "1.234,56"
@@ -28,7 +36,7 @@ function decodeEntities(s) {
 }
 
 /** Converte o conteúdo de um arquivo OFX em uma lista de transações. */
-function parseOfx(raw) {
+export function parseOfx(raw) {
   const text = String(raw || '');
   const blocks = text.split(/<STMTTRN>/i).slice(1).map(b => b.split(/<\/STMTTRN>/i)[0]);
   const result = [];
@@ -46,7 +54,7 @@ function parseOfx(raw) {
     let fitid = readTag(block, 'FITID');
     if (!fitid) {
       // Sem identificador do banco: gera um estável a partir do conteúdo para evitar duplicidade
-      fitid = 'H-' + crypto.createHash('sha1').update(`${date}|${amount}|${description}`).digest('hex').slice(0, 16);
+      fitid = 'H-' + stableHash(`${date}|${amount}|${description}`);
     }
 
     result.push({ fitid: fitid.slice(0, 100), date, amount_cents: amount, description });
@@ -71,7 +79,7 @@ const TOLERANCE_CENTS = 5;
  * Entradas: compara com juros do ciclo / juros + diárias (rolagem) e total de quitação.
  * Saídas: compara com o principal de contratos (desembolso); senão, despesa.
  */
-function suggestMatch(tx, contracts, today) {
+export function suggestMatch(tx, contracts, today) {
   if (tx.amount_cents < 0) {
     const abs = -tx.amount_cents;
     const candidates = contracts
@@ -108,5 +116,3 @@ function suggestMatch(tx, contracts, today) {
   matches.sort((a, b) => b.score - a.score);
   return { contract_id: matches[0].contract.id, action: matches[0].action };
 }
-
-module.exports = { parseOfx, suggestMatch, parseAmountToCents };

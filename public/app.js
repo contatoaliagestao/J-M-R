@@ -205,7 +205,11 @@ async function boot() {
   showScreen('boot');
   try {
     const setup = await api('GET', '/api/setup');
-    if (setup.needsSetup) return startSetup();
+    if (setup.needsSetup) {
+      $('#setupCodeRow').classList.toggle('hidden', !setup.needsSetupCode);
+      $('#setupForm [name=setup_code]').required = !!setup.needsSetupCode;
+      return startSetup();
+    }
     try {
       const me = await api('GET', '/api/me');
       return enterApp(me);
@@ -232,7 +236,7 @@ $('#setupForm').addEventListener('submit', async e => {
   await withBusy(btn, async () => {
     try {
       await api('POST', '/api/setup', {
-        name: f.name, email: f.email, password: f.password,
+        setup_code: f.setup_code, name: f.name, email: f.email, password: f.password,
         company: { official_name: f.official_name, short_name: f.short_name, cnpj: f.cnpj, tagline: f.tagline, color_theme: setupColor },
       });
       const me = await api('GET', '/api/me');

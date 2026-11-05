@@ -1,9 +1,7 @@
-'use strict';
-
-const test = require('node:test');
-const assert = require('node:assert');
-const { calculateDebt, nextDueDateAfterRollover, addDaysIso, isValidIsoDate } = require('../src/finance');
-const { parseOfx, suggestMatch } = require('../src/ofx');
+import test from 'node:test';
+import assert from 'node:assert';
+import { calculateDebt, nextDueDateAfterRollover, addDaysIso, isValidIsoDate } from '../src/finance.js';
+import { parseOfx, suggestMatch } from '../src/ofx.js';
 
 const base = { principal_cents: 200000, rate: 20, late_fee_rate: 10, cycle_days: 30, status: 'ATIVO' };
 

@@ -1,20 +1,31 @@
-'use strict';
+// Testes da API rodando no simulador local do Cloudflare (wrangler dev + D1 local).
+import test from 'node:test';
+import assert from 'node:assert';
+import { spawn, execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { todayIso, addDaysIso } from '../src/finance.js';
 
-const test = require('node:test');
-const assert = require('node:assert');
-const { openDatabase } = require('../src/db');
-const { createApp } = require('../src/server');
-const { todayIso, addDaysIso } = require('../src/finance');
-
-let server;
-let baseUrl;
+const PORT = 8790 + Math.floor(Math.random() * 100);
+const baseUrl = `http://127.0.0.1:${PORT}`;
+const persistDir = mkdtempSync(path.join(tmpdir(), 'jmr-test-'));
+let dev;
 
 test.before(async () => {
-  const app = createApp(openDatabase(':memory:'));
-  await new Promise(resolve => { server = app.listen(0, resolve); });
-  baseUrl = `http://127.0.0.1:${server.address().port}`;
+  execFileSync('npx', ['wrangler', 'd1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persistDir], { stdio: 'ignore' });
+  dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--persist-to', persistDir, '--var', 'SETUP_CODE:codigo-teste-123', '--show-interactive-dev-session=false'],
+    { stdio: 'ignore', detached: true });
+  for (let i = 0; i < 120; i++) {
+    try { if ((await fetch(baseUrl + '/api/setup')).ok) return; } catch { /* ainda subindo */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error('wrangler dev não iniciou');
 });
-test.after(() => server.close());
+test.after(() => {
+  try { process.kill(-dev.pid); } catch { /* já encerrado */ }
+  rmSync(persistDir, { recursive: true, force: true });
+});
 
 // Cliente simples que guarda o cookie de sessão
 function client() {
@@ -44,7 +55,15 @@ test('cadastro inicial do administrador por e-mail (só uma vez)', async () => {
   const bad = await admin('POST', '/api/setup', { name: 'Adm', email: 'adm@x.com', password: '123', company: { official_name: 'A', short_name: 'A' } });
   assert.strictEqual(bad.status, 400);
 
+  const semCodigo = await admin('POST', '/api/setup', {
+    name: 'Invasor', email: 'x@x.com', password: 'senha-forte-1', setup_code: 'errado',
+    company: { official_name: 'X LTDA', short_name: 'X' },
+  });
+  assert.strictEqual(semCodigo.status, 403);
+  assert.strictEqual((await admin('GET', '/api/setup')).data.needsSetup, true);
+
   const r = await admin('POST', '/api/setup', {
+    setup_code: 'codigo-teste-123',
     name: 'Administradora', email: 'Admin@JMR.com.br', password: 'senha-forte-1',
     company: { official_name: 'JMR Crédito LTDA', short_name: 'JMR Crédito', color_theme: 'amber' },
   });
@@ -206,4 +225,20 @@ test('requisições que alteram dados precisam ser JSON (proteção CSRF)', asyn
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'login=a&password=b',
   });
   assert.strictEqual(res.status, 415);
+});
+
+test('quitações simultâneas do mesmo contrato: só uma é gravada', async () => {
+  const me = await admin('GET', '/api/me');
+  const cid = me.data.companies[0].id;
+  const r = await admin('POST', `/api/companies/${cid}/contracts`, {
+    client_name: 'Concorrência', cpf: '1', phone: '11900000000', address: 'Rua C', principal: 500, rate: 10, cycle_days: 30,
+  });
+  const id = r.data.contract.id;
+  const results = await Promise.all([1, 2, 3].map(() =>
+    admin('POST', `/api/companies/${cid}/contracts/${id}/settle`, { channel: 'DINHEIRO' })));
+  // Uma passa; as outras são recusadas (já quitado = 400, ou alterado durante a operação = 409)
+  assert.strictEqual(results.filter(x => x.status === 200).length, 1);
+  results.filter(x => x.status !== 200).forEach(x => assert.ok([400, 409].includes(x.status)));
+  const d = await admin('GET', `/api/companies/${cid}/contracts/${id}`);
+  assert.strictEqual(d.data.payments.filter(p => p.type === 'QUITACAO').length, 1);
 });

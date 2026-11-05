@@ -30,6 +30,10 @@
           <p class="text-xs text-slate-400 mt-1">Cadastre o administrador (acesso por e-mail) e a primeira empresa.<br>Esta tela aparece apenas uma vez.</p>
         </div>
         <form id="setupForm" class="space-y-4 text-xs">
+          <div id="setupCodeRow" class="hidden">
+            <label class="field-label">Código de configuração *</label>
+            <input name="setup_code" autocomplete="off" spellcheck="false" class="field-input font-mono" placeholder="Código recebido de quem instalou o sistema">
+          </div>
           <p class="text-[11px] font-bold uppercase tracking-widest theme-accent-text">Administrador</p>
           <div>
             <label class="field-label">Nome completo *</label>

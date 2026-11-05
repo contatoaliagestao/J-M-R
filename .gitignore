@@ -5,3 +5,6 @@ data/
 *.db-wal
 *.db-shm
 .env
+.wrangler/
+.dev.vars
+src/generated/

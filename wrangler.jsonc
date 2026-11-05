@@ -1,0 +1,21 @@
+{
+  // Configuração do Cloudflare Workers para o sistema JMR
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jmr-gestao",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jmr-db",
+      "database_id": "6942de7d-dc5a-4a61-ba96-9b554e2578c5",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "MAX_EMPRESAS": "3"
+  },
+  "observability": { "enabled": true }
+}

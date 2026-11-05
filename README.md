@@ -35,56 +35,65 @@ Considere um contrato de **R$ 2.000** a **20%** por ciclo, com diária de **10%*
 - No dia do vencimento ainda não há atraso.
 - Os valores são calculados no servidor, em centavos, para evitar erros de arredondamento.
 
-## Como rodar no computador
+## Onde o sistema está publicado
 
-Pré-requisito: [Node.js](https://nodejs.org) versão 22.9 ou mais recente.
+O sistema roda no **Cloudflare Workers**, com o banco de dados **Cloudflare D1** (SQLite gerenciado, com cópias automáticas dos últimos 30 dias).
+
+- Endereço: https://jmr-gestao.jmr-gestao-financeira.workers.dev
+- Banco D1: `jmr-db`
+- No primeiro acesso, a tela de configuração pede um **código de configuração**. Esse código fica guardado como segredo `SETUP_CODE` no Cloudflare e impede que um estranho que encontre o endereço faça o cadastro inicial.
+
+## Como rodar no computador (para testes)
+
+Pré-requisito: [Node.js](https://nodejs.org) versão 20 ou mais recente.
 
 ```bash
 npm install
 ```
 
 ```bash
-npm start
+npm run dev
 ```
 
-Depois abra http://localhost:3000 no navegador e faça o cadastro inicial.
+Depois abra http://localhost:8787 no navegador. O banco local fica na pasta `.wrangler/` e não mistura com o banco publicado.
 
-Para rodar os testes automáticos:
+Para rodar os testes automáticos (eles usam o simulador local do Cloudflare):
 
 ```bash
 npm test
 ```
 
-## Como colocar no ar (hospedagem)
+## Como publicar uma nova versão
 
-O sistema é um único servidor Node.js e guarda os dados em um arquivo SQLite (`data/jmr.db`). Ele funciona em qualquer serviço que rode Node.js **com disco persistente**, por exemplo Render (com *Persistent Disk*), Railway (com *Volume*) ou uma VPS.
+É preciso um API Token do Cloudflare com as permissões do modelo **"Edit Cloudflare Workers"** mais **D1 → Edit**.
 
-1. Comando de instalação: `npm install`. Comando de início: `npm start`.
-2. Configure as variáveis de ambiente (veja `.env.example`). As principais são:
-   - `DATA_DIR`: pasta do disco persistente (ex.: `/var/data`)
-   - `NODE_ENV=production` e `TRUST_PROXY=true`
-3. Use **HTTPS**, que esses serviços já oferecem.
-4. **Faça backup** do arquivo `jmr.db` regularmente.
+```bash
+CLOUDFLARE_API_TOKEN=seu-token npm run deploy
+```
+
+O comando empacota as telas, aplica no banco as mudanças de estrutura que ainda não foram aplicadas (pasta `migrations/`) e publica o Worker.
 
 ## Esqueci a senha
 
 - **Usuários:** o administrador define uma nova senha em *Usuários e acessos → Editar*.
-- **Administrador:** no servidor, rode:
+- **Administrador:** com o token do Cloudflare configurado, rode:
 
 ```bash
-npm run reset-senha-admin -- "nova-senha-aqui"
+CLOUDFLARE_API_TOKEN=seu-token npm run reset-senha-admin -- "nova-senha-aqui"
 ```
 
 ## Estrutura do projeto
 
 ```
-src/server.js     Servidor e rotas da API (com as permissões)
-src/finance.js    Regras de cálculo (juros, diárias, rolagem)
-src/ofx.js        Leitura do extrato OFX e sugestão de vínculo
-src/auth.js       Senhas (scrypt), sessões e limite de tentativas de login
-src/db.js         Estrutura do banco de dados
-public/           Telas do sistema (HTML, JavaScript e CSS)
-test/             Testes automáticos
+src/worker.js          Servidor (Cloudflare Worker): rotas da API e permissões
+src/finance.js         Regras de cálculo (juros, diárias, rolagem)
+src/ofx.js             Leitura do extrato OFX e sugestão de vínculo
+src/auth.js            Senhas (PBKDF2), sessões e limite de tentativas de login
+migrations/            Estrutura do banco de dados (D1)
+public/                Telas do sistema (HTML, JavaScript e CSS)
+scripts/               Empacotamento das telas e redefinição de senha do administrador
+test/                  Testes automáticos
+wrangler.jsonc         Configuração do Cloudflare
 ```
 
 Se você alterar as classes visuais em `public/index.html` ou `public/app.js`, gere o CSS de novo:

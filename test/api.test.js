@@ -242,3 +242,21 @@ test('quitações simultâneas do mesmo contrato: só uma é gravada', async () 
   const d = await admin('GET', `/api/companies/${cid}/contracts/${id}`);
   assert.strictEqual(d.data.payments.filter(p => p.type === 'QUITACAO').length, 1);
 });
+
+test('administrador edita o nome de usuário', async () => {
+  const users = (await admin('GET', '/api/users')).data.users;
+  const renata = users.find(u => u.username === 'renata');
+  const r = await admin('PUT', `/api/users/${renata.id}`, { username: 'Renata.Gestora' });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.data.user.username, 'renata.gestora');
+
+  assert.strictEqual((await client()('POST', '/api/login', { login: 'renata', password: 'senha-renata-1' })).status, 401);
+  assert.strictEqual((await client()('POST', '/api/login', { login: 'renata.gestora', password: 'senha-renata-1' })).status, 200);
+  // A sessão que já estava aberta continua valendo
+  assert.strictEqual((await gestor('GET', '/api/me')).status, 200);
+
+  assert.strictEqual((await admin('PUT', `/api/users/${renata.id}`, { username: 'lucas.cobranca' })).status, 409);
+  assert.strictEqual((await admin('PUT', `/api/users/${renata.id}`, { username: 'com espaço' })).status, 400);
+  // Salvar sem mudar o nome não dá erro
+  assert.strictEqual((await admin('PUT', `/api/users/${renata.id}`, { username: 'renata.gestora', name: 'Renata' })).status, 200);
+});

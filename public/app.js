@@ -919,7 +919,7 @@ function openUserForm(user) {
   form.record_id.value = user ? user.id : '';
   form.name.value = user ? user.name : '';
   form.username.value = user ? (user.username || user.email) : '';
-  form.username.disabled = !!user;
+  form.username.disabled = isAdminUser; // o administrador entra pelo e-mail, que não muda aqui
   form.role.value = user && !isAdminUser ? user.role : 'OPERADOR';
   form.role.disabled = isAdminUser;
   form.active.checked = user ? user.active : true;
@@ -952,7 +952,7 @@ $('#userForm').addEventListener('submit', async e => {
     if (target) body.active = form.active.checked;
     if (!companyIds.length) return toast('Selecione ao menos 1 empresa.', 'warning');
   }
-  if (!id) body.username = form.username.value.trim();
+  if (!target || target.role !== 'ADMIN') body.username = form.username.value.trim();
 
   await withBusy(form.querySelector('[type=submit]'), async () => {
     try {

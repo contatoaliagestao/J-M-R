@@ -377,6 +377,18 @@ app.put('/api/users/:id', requireAuth, requireAdmin, async c => {
   if (b.name !== undefined) {
     stmts.push(db.prepare('UPDATE users SET name = ? WHERE id = ?').bind(str(b.name, { field: 'Nome', required: true, max: 100 }), id));
   }
+  if (b.username !== undefined && target.role !== 'ADMIN') {
+    const username = str(b.username, { field: 'Nome de usuário', required: true, max: 30 }).toLowerCase();
+    if (!USERNAME_RE.test(username)) {
+      throw new HttpError(400, 'Nome de usuário: use de 3 a 30 letras, números, ponto, hífen ou sublinhado (sem espaços e sem @).');
+    }
+    if (username !== target.username) {
+      if (await db.prepare('SELECT 1 AS x FROM users WHERE username = ? AND id != ?').bind(username, id).first()) {
+        throw new HttpError(409, 'Este nome de usuário já está em uso.');
+      }
+      stmts.push(db.prepare('UPDATE users SET username = ? WHERE id = ?').bind(username, id));
+    }
+  }
   if (b.password) {
     const pwErr = auth.validatePasswordStrength(b.password);
     if (pwErr) throw new HttpError(400, pwErr);
@@ -403,7 +415,14 @@ app.put('/api/users/:id', requireAuth, requireAdmin, async c => {
       companyIds.forEach(cid => stmts.push(db.prepare('INSERT INTO user_companies (user_id, company_id) VALUES (?, ?)').bind(id, cid)));
     }
   }
-  if (stmts.length) await db.batch(stmts);
+  if (stmts.length) {
+    try {
+      await db.batch(stmts);
+    } catch (err) {
+      if (String(err.cause?.message || err.message).includes('UNIQUE')) throw new HttpError(409, 'Este nome de usuário já está em uso.');
+      throw err;
+    }
+  }
   return c.json({ user: await userWithCompanies(db, await db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first()) });
 });
 

@@ -168,6 +168,7 @@ function showScreen(name) {
   $('#' + id).classList.remove('hidden');
   if (name === 'app') $('#appContainer').classList.add('flex');
   else $('#appContainer').classList.remove('flex');
+  $('#mobileNav').classList.toggle('hidden', name !== 'app');
   if (name === 'login') {
     applyTheme('amber');
     setTimeout(() => $('#loginForm [name=login]').focus(), 50);
@@ -291,6 +292,11 @@ function enterApp(me) {
   $('#todayDisplay').textContent = brDate(me.today);
   $$('[data-admin]').forEach(el => el.classList.toggle('hidden', !isAdmin()));
   $$('[data-manager]').forEach(el => el.classList.toggle('hidden', !isManager()));
+  $$('[data-operator-only]').forEach(el => el.classList.toggle('hidden', isManager()));
+  $('#mobileAvatar').textContent = initials(me.user.name);
+  $('#mobileMenuAvatar').textContent = initials(me.user.name);
+  $('#mobileMenuName').textContent = me.user.name;
+  $('#mobileMenuRole').textContent = ROLE_LABEL[me.user.role];
 
   showScreen('app');
 
@@ -327,6 +333,8 @@ function selectCompany(id, { silent = false } = {}) {
   $('#sidebarCompanyName').textContent = company.short_name;
   $('#sidebarCompanyTagline').textContent = company.tagline || '';
   renderLogo($('#sidebarLogo'), company);
+  renderLogo($('#mobileLogo'), company);
+  $('#mobileCompanyName').textContent = company.short_name;
   $('#companyDropdownMenu').classList.add('hidden');
   state.bank = null;
   if (!silent) {
@@ -378,7 +386,9 @@ function navigate(tab) {
   $('#pageSubtitle').textContent = h.subtitle;
   $('#breadcrumb').textContent = h.title;
   Object.keys(PAGE_HEADERS).forEach(t => $('#view-' + t).classList.toggle('hidden', t !== tab));
-  $$('.sidebar-btn[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  $$('.sidebar-btn[data-tab], .mnav-btn[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  $('#mobileTitle').textContent = h.title;
+  window.scrollTo(0, 0);
   refresh();
 }
 
@@ -461,6 +471,7 @@ function renderContracts() {
       && (status === 'ALL' || c.situation === status);
   });
 
+  renderContractCards(list);
   const tbody = $('#contractsTableBody');
   if (!list.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-slate-500">${state.contracts.length ? 'Nenhum contrato encontrado com esses filtros.' : 'Nenhum contrato cadastrado nesta empresa ainda.'}</td></tr>`;
@@ -492,6 +503,57 @@ function renderContracts() {
         <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" title="Abrir WhatsApp" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 p-1.5 rounded-lg text-xs border border-slate-700"><i class="fa-brands fa-whatsapp"></i></a>
       </div></td>
     </tr>`;
+  }).join('');
+}
+
+// Cartões de contrato para o celular (mesmos dados da tabela, em formato fácil de tocar)
+function renderContractCards(list) {
+  const box = $('#contractsCards');
+  if (!list.length) {
+    box.innerHTML = `<div class="panel p-6 text-center text-slate-400 text-sm">${state.contracts.length ? 'Nenhum contrato encontrado.' : 'Nenhum contrato cadastrado ainda.<br>Toque em <b>+</b> para lançar o primeiro.'}</div>`;
+    return;
+  }
+  box.innerHTML = list.map(c => {
+    const a = c.agreement;
+    const inAgreement = c.situation === 'ACORDO' && a;
+    const late = c.situation === 'ATRASADO' || (inAgreement && a.overdue_count > 0);
+    let dueLine;
+    let amountLabel;
+    let amount;
+    if (c.situation === 'QUITADO') {
+      dueLine = `Quitado em ${brDate(c.settled_at)}`; amountLabel = 'Principal'; amount = c.principal_cents;
+    } else if (inAgreement) {
+      const n = a.next_installment;
+      dueLine = n ? `Parcela ${n.number}/${a.installments_count}: ${brDate(n.due_date)} • ${money(n.amount_cents)}` : 'Acordo';
+      amountLabel = 'Saldo do acordo'; amount = a.remaining_cents;
+    } else {
+      dueLine = `Vence ${brDate(c.due_date)}${c.debt.overdueDays ? ` • ${c.debt.overdueDays}d de atraso` : ''}`;
+      amountLabel = 'Para quitar'; amount = c.debt.totalToSettle;
+    }
+    const canPay = c.status === 'ATIVO' && isManager() && !inAgreement;
+    return `<div class="ccard ${late ? 'border-red-500/40' : ''}">
+      <button data-action="dossier" data-id="${c.id}" class="w-full text-left">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-[15px] font-bold text-white truncate">${esc(c.client_name)}</div>
+            <div class="text-[11px] text-slate-400"><span class="font-mono theme-accent-text font-semibold">${esc(c.code)}</span> • ${money(c.principal_cents)} a ${c.rate}%/${c.cycle_days}d</div>
+          </div>
+          <div class="flex-shrink-0">${statusBadge(c)}</div>
+        </div>
+        <div class="flex items-end justify-between gap-2 mt-3">
+          <div class="text-xs ${late ? 'text-red-300' : 'text-slate-300'} font-mono">${dueLine}</div>
+          <div class="text-right">
+            <div class="text-[10px] text-slate-400 uppercase">${amountLabel}</div>
+            <div class="font-mono font-black text-base ${late ? 'text-amber-400' : (c.situation === 'QUITADO' ? 'text-slate-400' : 'text-emerald-400')}">${money(amount)}</div>
+          </div>
+        </div>
+      </button>
+      <div class="grid ${canPay ? 'grid-cols-3' : 'grid-cols-2'} gap-2 mt-3">
+        <button data-action="dossier" data-id="${c.id}" class="ccard-btn bg-blue-600 text-white"><i class="fa-solid fa-folder-open"></i>Ficha</button>
+        <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" class="ccard-btn bg-emerald-700 text-white"><i class="fa-brands fa-whatsapp"></i>WhatsApp</a>
+        ${canPay ? `<button data-action="payment" data-id="${c.id}" class="ccard-btn bg-emerald-500 text-slate-950"><i class="fa-solid fa-money-bill-wave"></i>Baixa</button>` : ''}
+      </div>
+    </div>`;
   }).join('');
 }
 
@@ -593,6 +655,8 @@ function renderOverdue() {
   const badge = $('#overdueBadge');
   badge.textContent = list.length + agreementsLate.length;
   badge.classList.toggle('hidden', list.length + agreementsLate.length === 0);
+  $('#mobileOverdueBadge').textContent = list.length + agreementsLate.length;
+  $('#mobileOverdueBadge').classList.toggle('hidden', list.length + agreementsLate.length === 0);
 
   const box = $('#overdueCards');
   if (!list.length && !agreementsLate.length) {
@@ -1317,11 +1381,30 @@ $('#passwordForm').addEventListener('submit', async e => {
   });
 });
 
+// ===================== MENU (CELULAR) =====================
+function openMobileMenu() {
+  $('#mobileCompanyList').innerHTML = state.companies.map(c => {
+    const t = COLOR_THEMES[c.color_theme] || COLOR_THEMES.amber;
+    const current = c.id === state.activeCompanyId;
+    return `<button data-mobile-company="${c.id}" class="menu-item" ${current ? `style="border-color:${t.hex}"` : ''}>
+      <span class="w-3 h-3 rounded-full flex-shrink-0" style="background:${t.hex}"></span>
+      <span class="flex-1 min-w-0 truncate">${esc(c.short_name)}</span>
+      ${current ? `<i class="fa-solid fa-check" style="color:${t.hex}"></i>` : ''}
+    </button>`;
+  }).join('') || '<p class="text-xs text-slate-400">Nenhuma empresa liberada.</p>';
+  openModal('mobileMenuModal');
+}
+
 // ===================== CLIQUES (DELEGAÇÃO) =====================
 document.addEventListener('click', e => {
   const closer = e.target.closest('[data-close]');
   if (closer) return closer.closest('.modal').classList.add('hidden');
   if (e.target.classList.contains('modal')) return e.target.classList.add('hidden');
+
+  // No menu do celular: troca de empresa, e qualquer opção fecha o menu antes de agir
+  const mc = e.target.closest('[data-mobile-company]');
+  if (mc) { closeModal('mobileMenuModal'); return selectCompany(Number(mc.dataset.mobileCompany)); }
+  if (e.target.closest('#mobileMenuModal') && e.target.closest('[data-tab], [data-action]')) closeModal('mobileMenuModal');
 
   const tabBtn = e.target.closest('[data-tab], [data-tab-link]');
   if (tabBtn) return navigate(tabBtn.dataset.tab || tabBtn.dataset.tabLink);
@@ -1331,6 +1414,7 @@ document.addEventListener('click', e => {
   const id = Number(el.dataset.id);
   switch (el.dataset.action) {
     case 'logout': return logout();
+    case 'open-mobile-menu': return openMobileMenu();
     case 'new-loan': return openLoanModal();
     case 'dossier': return openDossier(id);
     case 'payment': return openPayment(id);

@@ -1,16 +1,16 @@
 /* Garante que botões do menu escondidos fiquem escondidos (o estilo próprio deles define display) */
-.sidebar-btn.hidden, .sidebar-btn-sm.hidden { display: none; }
+.sidebar-btn.hidden, .sidebar-btn-sm.hidden, .mnav-btn.hidden, .menu-item.hidden { display: none; }
 
 :root {
   --theme-primary: #f59e0b;
   --theme-primary-rgb: 245, 158, 11;
   --theme-glow: rgba(245, 158, 11, 0.15);
 }
-body { background-color: #070b14; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+body { background-color: #172033; color: #e2e8f0; font-family: 'Inter', sans-serif; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0f172a; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+::-webkit-scrollbar-track { background: #1d2840; }
+::-webkit-scrollbar-thumb { background: #3d4c67; border-radius: 4px; }
 
 /* Tema dinâmico da empresa ativa */
 .theme-accent-text { color: var(--theme-primary) !important; }
@@ -31,16 +31,16 @@ body { background-color: #070b14; color: #e2e8f0; font-family: 'Inter', sans-ser
 /* Formulários */
 .field-label { display: block; color: #cbd5e1; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .field-input {
-  width: 100%; background: #020617; border: 1px solid #1e293b; border-radius: 12px;
+  width: 100%; background: #152036; border: 1px solid #2b3953; border-radius: 12px;
   padding: 8px 12px; font-size: 12px; color: #fff; outline: none; transition: border-color .15s;
 }
-.field-input::placeholder { color: #64748b; }
+.field-input::placeholder { color: #7c8aa0; }
 .field-input:focus { border-color: var(--theme-primary); }
 .field-input.pl-9 { padding-left: 2.25rem; }
 .field-input.pr-10 { padding-right: 2.5rem; }
 .field-input.w-auto { width: auto; }
-.btn-secondary { padding: 8px 16px; background: #1e293b; color: #cbd5e1; border-radius: 12px; }
-.btn-secondary:hover { background: #334155; }
+.btn-secondary { padding: 8px 16px; background: #2b3953; color: #cbd5e1; border-radius: 12px; }
+.btn-secondary:hover { background: #3d4c67; }
 
 /* Barra lateral */
 .sidebar-btn {
@@ -60,16 +60,16 @@ body { background-color: #070b14; color: #e2e8f0; font-family: 'Inter', sans-ser
   width: 100%; padding: 10px 16px; font-size: 11px; font-weight: 600; border-radius: 12px;
   color: #94a3b8; display: flex; align-items: center; gap: 12px; transition: all .15s;
 }
-.sidebar-btn-sm:hover { color: #fff; background: #0f172a; }
+.sidebar-btn-sm:hover { color: #fff; background: #1d2840; }
 
 /* Cartões */
-.panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; }
-.kpi-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 20px; }
+.panel { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; }
+.kpi-card { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 20px; }
 .kpi-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
 .kpi-icon { padding: 6px; border-radius: 8px; }
 .kpi-value { font-size: 1.5rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; }
-.kpi-foot { font-size: 11px; color: #64748b; margin-top: 8px; }
-.stat-box { background: #020617; padding: 12px; border-radius: 12px; border: 1px solid #1e293b; text-align: center; }
+.kpi-foot { font-size: 11px; color: #7c8aa0; margin-top: 8px; }
+.stat-box { background: #152036; padding: 12px; border-radius: 12px; border: 1px solid #2b3953; text-align: center; }
 .stat-box > span { font-size: 11px; color: #94a3b8; }
 .stat-box > div { font-size: 1rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
 
@@ -80,11 +80,11 @@ body { background-color: #070b14; color: #e2e8f0; font-family: 'Inter', sans-ser
 }
 .modal:not(.hidden) { display: flex; }
 .modal-box {
-  background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; width: 100%;
+  background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; width: 100%;
   padding: 24px; box-shadow: 0 25px 50px -12px rgba(0,0,0,.5);
 }
 .modal-box > * + * { margin-top: 20px; }
-.modal-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #1e293b; gap: 12px; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #2b3953; gap: 12px; }
 
 /* Impressão: apenas o relatório */
 @media print {
@@ -93,4 +93,52 @@ body { background-color: #070b14; color: #e2e8f0; font-family: 'Inter', sans-ser
   .print-area { position: absolute; left: 0; top: 0; width: 100%; max-height: none !important; box-shadow: none; }
   .print-area .overflow-y-auto { overflow: visible !important; }
   .no-print { display: none !important; }
+}
+
+/* ===================== CELULAR ===================== */
+/* Barra de navegação inferior */
+.mobile-nav { padding-bottom: env(safe-area-inset-bottom); }
+.mnav-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 10px 0 8px; font-size: 10px; font-weight: 600; color: #94a3b8; min-height: 58px;
+}
+.mnav-btn i { font-size: 18px; }
+.mnav-btn.active { color: var(--theme-primary); }
+.mnav-plus { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-bottom: 8px; }
+.mnav-plus > span:first-child {
+  width: 54px; height: 54px; border-radius: 9999px; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; margin-top: -22px; box-shadow: 0 8px 20px rgba(0,0,0,.45), 0 0 0 4px #121a2b;
+}
+.mnav-plus-label { font-size: 10px; font-weight: 700; color: var(--theme-primary); }
+.mobile-top { padding-top: calc(env(safe-area-inset-top) + 10px); }
+
+/* Itens do menu */
+.menu-item {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 14px;
+  background: #152036; border: 1px solid #2b3953; color: #e2e8f0; font-size: 14px; font-weight: 600; text-align: left;
+}
+.menu-item i { width: 18px; text-align: center; }
+.menu-item:active { background: #2b3953; }
+
+/* Cartão de contrato */
+.ccard { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 14px; }
+.ccard-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px;
+  border-radius: 12px; font-size: 13px; font-weight: 700;
+}
+
+@media (max-width: 767px) {
+  /* Espaço para a barra inferior não cobrir o conteúdo */
+  .mobile-main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  /* Campos com 16px: evita o zoom automático do iPhone ao tocar */
+  .field-input, textarea.field-input, select.field-input { font-size: 16px; padding: 11px 12px; }
+  /* Janelas em tela cheia */
+  .modal { padding: 0; align-items: stretch; }
+  .modal-box {
+    max-width: none !important; max-height: none !important; height: 100dvh; border-radius: 0; border: 0;
+    overflow-y: auto; padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px);
+  }
+  .modal-head { position: sticky; top: calc(-1 * (env(safe-area-inset-top) + 16px)); background: #1d2840; z-index: 2; padding-top: 4px; }
+  /* Botões maiores para o dedo */
+  .modal-box button[type=submit], .modal-box .btn-secondary { min-height: 46px; font-size: 14px; }
 }

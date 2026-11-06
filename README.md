@@ -19,6 +19,7 @@ Sistema web para gestão de **empréstimos, cobrança e conciliação bancária*
 - **Ficha do cliente:** histórico automático (concessão, rolagens, quitação) e ocorrências livres.
 - **Acordos:** para clientes em atraso que não conseguem pagar. Você define o valor total acordado e as parcelas com total liberdade: quantidade, 1ª data, intervalo mensal, de 15, 10 ou 7 dias ou qualquer número de dias, e datas e valores editáveis um a um. Enquanto o acordo vale, o contrato não acumula diárias. Parcelas vencidas aparecem na Cobrança e no relatório. Quando a última parcela é paga, o contrato é quitado. Também dá para renegociar o saldo ou cancelar um acordo sem pagamentos. O dashboard mostra total acordado, recebido, a receber, parcelas atrasadas, próximos 30 dias, receita e desconto concedido.
 - **Conciliação OFX:** importa o extrato do banco, sugere o contrato e a ação de cada Pix/TED e exige validação manual. Reimportar o mesmo extrato não duplica lançamentos.
+- **Versão para celular:** barra de navegação embaixo com Contratos, Cobrança, um botão "+" para novo empréstimo, Início/Relatório e Menu. Os contratos aparecem em cartões, os formulários abrem em tela cheia e o teclado numérico aparece nos campos de valor. Dá para **instalar na tela inicial** do celular como um aplicativo.
 - **Relatório de inadimplência** pronto para imprimir.
 
 ## Regras financeiras

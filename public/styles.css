@@ -6,7 +6,7 @@
   --theme-primary-rgb: 245, 158, 11;
   --theme-glow: rgba(245, 158, 11, 0.15);
 }
-body { background-color: #172033; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+body { background-color: #dde3ec; color: #e2e8f0; font-family: 'Inter', sans-serif; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: #1d2840; }
@@ -63,8 +63,8 @@ body { background-color: #172033; color: #e2e8f0; font-family: 'Inter', sans-ser
 .sidebar-btn-sm:hover { color: #fff; background: #1d2840; }
 
 /* Cartões */
-.panel { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; }
-.kpi-card { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 20px; }
+.panel { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; box-shadow: 0 2px 8px rgba(15, 23, 42, .12); }
+.kpi-card { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(15, 23, 42, .12); }
 .kpi-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
 .kpi-icon { padding: 6px; border-radius: 8px; }
 .kpi-value { font-size: 1.5rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; }
@@ -121,7 +121,7 @@ body { background-color: #172033; color: #e2e8f0; font-family: 'Inter', sans-ser
 .menu-item:active { background: #2b3953; }
 
 /* Cartão de contrato */
-.ccard { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 14px; }
+.ccard { background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; padding: 14px; box-shadow: 0 2px 8px rgba(15, 23, 42, .15); }
 .ccard-btn {
   display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px;
   border-radius: 12px; font-size: 13px; font-weight: 700;

@@ -17,6 +17,7 @@ Sistema web para gestão de **empréstimos, cobrança e conciliação bancária*
 - **Baixa manual:** rolagem (paga juros + diárias, vencimento avança 1 ciclo) ou quitação total.
 - **Cobrança:** lista de atrasados, texto de cobrança pronto para copiar e atalho para o WhatsApp.
 - **Ficha do cliente:** histórico automático (concessão, rolagens, quitação) e ocorrências livres.
+- **Acordos:** para clientes em atraso que não conseguem pagar. Você define o valor total acordado e as parcelas com total liberdade: quantidade, 1ª data, intervalo mensal, de 15, 10 ou 7 dias ou qualquer número de dias, e datas e valores editáveis um a um. Enquanto o acordo vale, o contrato não acumula diárias. Parcelas vencidas aparecem na Cobrança e no relatório. Quando a última parcela é paga, o contrato é quitado. Também dá para renegociar o saldo ou cancelar um acordo sem pagamentos. O dashboard mostra total acordado, recebido, a receber, parcelas atrasadas, próximos 30 dias, receita e desconto concedido.
 - **Conciliação OFX:** importa o extrato do banco, sugere o contrato e a ação de cada Pix/TED e exige validação manual. Reimportar o mesmo extrato não duplica lançamentos.
 - **Relatório de inadimplência** pronto para imprimir.
 
@@ -33,6 +34,7 @@ Considere um contrato de **R$ 2.000** a **20%** por ciclo, com diária de **10%*
 
 - Na rolagem, o novo vencimento é **vencimento atual + ciclo**. Se o contrato já estiver vencido, conta-se **hoje + ciclo**.
 - No dia do vencimento ainda não há atraso.
+- **Acordo:** cada parcela recebida abate primeiro o principal ainda não recuperado, e o que passar disso conta como receita. O principal pendente nos acordos continua somando no "Capital alocado".
 - Os valores são calculados no servidor, em centavos, para evitar erros de arredondamento.
 
 ## Onde o sistema está publicado

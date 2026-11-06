@@ -234,7 +234,7 @@
             <div class="kpi-card">
               <div class="kpi-head"><span>Capital Alocado (Principal)</span><span class="kpi-icon bg-blue-500/10 text-blue-400"><i class="fa-solid fa-money-bill-transfer"></i></span></div>
               <h3 id="kpiCapital" class="kpi-value text-white">R$ 0,00</h3>
-              <p class="kpi-foot">Dinheiro na rua em contratos ativos</p>
+              <p class="kpi-foot">Dinheiro na rua: contratos ativos + principal ainda não recebido nos acordos</p>
             </div>
             <div class="kpi-card">
               <div class="kpi-head"><span>Receita Realizada</span><span class="kpi-icon bg-emerald-500/10 text-emerald-400"><i class="fa-solid fa-chart-line"></i></span></div>
@@ -293,6 +293,24 @@
               </div>
             </div>
           </div>
+
+          <div class="panel p-6">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+              <h4 class="text-sm font-bold text-white"><i class="fa-solid fa-handshake text-amber-400 mr-2"></i>Acordos</h4>
+              <span id="acordoResumo" class="text-[11px] text-slate-400"></span>
+            </div>
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div class="stat-box"><span>Total acordado (ativos)</span><div id="acordoTotal" class="text-white">R$ 0,00</div></div>
+              <div class="stat-box"><span>Já recebido</span><div id="acordoRecebido" class="text-emerald-400">R$ 0,00</div></div>
+              <div class="stat-box"><span>A receber</span><div id="acordoAReceber" class="text-amber-400">R$ 0,00</div></div>
+              <div class="stat-box"><span>Parcelas em atraso</span><div id="acordoAtrasado" class="text-red-400">R$ 0,00</div></div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4 text-xs">
+              <div class="flex justify-between bg-slate-950/60 border border-slate-800/80 rounded-xl px-4 py-3"><span class="text-slate-400">A vencer nos próximos 30 dias</span><strong id="acordoProx30" class="font-mono text-slate-200">R$ 0,00</strong></div>
+              <div class="flex justify-between bg-slate-950/60 border border-slate-800/80 rounded-xl px-4 py-3"><span class="text-slate-400">Receita vinda de acordos</span><strong id="acordoReceita" class="font-mono text-emerald-400">R$ 0,00</strong></div>
+              <div class="flex justify-between bg-slate-950/60 border border-slate-800/80 rounded-xl px-4 py-3"><span class="text-slate-400">Desconto concedido</span><strong id="acordoDesconto" class="font-mono text-rose-300">R$ 0,00</strong></div>
+            </div>
+          </div>
         </section>
 
         <!-- CONTRATOS -->
@@ -312,6 +330,7 @@
                 <option value="ALL">Todos os status</option>
                 <option value="EM_DIA">Em dia</option>
                 <option value="ATRASADO">Em atraso</option>
+                <option value="ACORDO">Em acordo</option>
                 <option value="QUITADO">Quitados</option>
               </select>
             </div>
@@ -473,7 +492,90 @@
             <span class="text-xs">Quitar Contrato</span><span class="text-[10px] text-emerald-950 mt-0.5">Principal + juros + diárias</span>
           </button>
         </div>
+        <button data-action="open-agreement" class="w-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold p-3 rounded-xl flex flex-col items-center">
+          <span class="text-xs"><i class="fa-solid fa-handshake mr-1"></i>Fazer Acordo</span>
+          <span class="text-[10px] text-amber-200/70 mt-0.5">Cliente não consegue pagar: negociar valor e parcelas</span>
+        </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Acordo (novo ou renegociação) -->
+  <div id="agreementModal" class="modal hidden">
+    <div class="modal-box max-w-2xl max-h-[94vh] flex flex-col">
+      <div class="modal-head">
+        <div>
+          <h3 id="agreementTitle" class="text-sm font-bold text-white"><i class="fa-solid fa-handshake text-amber-400 mr-2"></i>Acordo de pagamento</h3>
+          <p id="agreementSub" class="text-xs text-slate-400"></p>
+        </div>
+        <button data-close class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <form id="agreementForm" class="flex-1 overflow-y-auto space-y-4 text-xs pr-1">
+        <div id="agreementDebtInfo" class="bg-slate-950 p-3 rounded-xl border border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="col-span-2"><label class="field-label">Valor total acordado (R$) *</label><input name="total" type="number" step="0.01" min="0.01" required class="field-input font-mono"></div>
+          <div><label class="field-label">Nº de parcelas *</label><input name="count" type="number" min="1" max="120" value="3" required class="field-input font-mono"></div>
+          <div><label class="field-label">1ª parcela em *</label><input name="first_date" type="date" required class="field-input font-mono"></div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+          <div class="col-span-2">
+            <label class="field-label">Intervalo entre parcelas *</label>
+            <select name="interval" class="field-input">
+              <option value="MENSAL">Mensal (mesmo dia todo mês)</option>
+              <option value="15">A cada 15 dias</option>
+              <option value="10">A cada 10 dias</option>
+              <option value="7">Semanal (7 dias)</option>
+              <option value="CUSTOM">Outro intervalo...</option>
+            </select>
+          </div>
+          <div id="customDaysBox" class="hidden"><label class="field-label">A cada quantos dias?</label><input name="custom_days" type="number" min="1" max="365" value="20" class="field-input font-mono"></div>
+          <div><button type="button" data-action="regen-installments" class="w-full btn-secondary text-xs"><i class="fa-solid fa-rotate mr-1"></i>Gerar parcelas</button></div>
+        </div>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="field-label mb-0">Parcelas (você pode alterar datas e valores de cada uma)</label>
+            <button type="button" data-action="add-installment" class="text-[11px] theme-accent-text hover:underline font-bold"><i class="fa-solid fa-plus text-[10px]"></i> Adicionar parcela</button>
+          </div>
+          <div class="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+            <table class="w-full text-xs">
+              <thead><tr class="text-slate-400 border-b border-slate-800"><th class="p-2 text-left w-12">Nº</th><th class="p-2 text-left">Vencimento</th><th class="p-2 text-left">Valor (R$)</th><th class="p-2 w-10"></th></tr></thead>
+              <tbody id="installmentsEditor"></tbody>
+            </table>
+          </div>
+          <div id="installmentsSum" class="text-[11px] font-mono text-right"></div>
+        </div>
+        <div><label class="field-label">Condições combinadas / observações</label>
+          <textarea name="notes" rows="2" maxlength="2000" class="field-input" placeholder="Ex: entrada no Pix hoje, demais parcelas em dinheiro no escritório; se atrasar 2 parcelas o acordo é desfeito..."></textarea></div>
+        <div class="flex justify-end space-x-3 pt-2 border-t border-slate-800">
+          <button type="button" data-close class="btn-secondary">Cancelar</button>
+          <button type="submit" class="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl">Gravar acordo</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Receber parcela de acordo -->
+  <div id="installmentPayModal" class="modal hidden">
+    <div class="modal-box max-w-md">
+      <div class="modal-head">
+        <div>
+          <h3 class="text-sm font-bold text-white"><i class="fa-solid fa-hand-holding-dollar text-emerald-400 mr-2"></i>Receber parcela do acordo</h3>
+          <p id="installmentPaySub" class="text-xs text-slate-400"></p>
+        </div>
+        <button data-close class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <form id="installmentPayForm" class="space-y-4 text-xs">
+        <div><label class="field-label">Valor recebido (R$)</label><input name="amount" type="number" step="0.01" min="0.01" required class="field-input font-mono"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="flex items-center space-x-2 bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer"><input type="radio" name="channel" value="DINHEIRO" checked><span class="font-bold text-white">Dinheiro</span></label>
+          <label class="flex items-center space-x-2 bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer"><input type="radio" name="channel" value="PIX_MANUAL"><span class="font-bold text-white">Pix / Transf.</span></label>
+        </div>
+        <div><label class="field-label">Observações (opcional)</label><input name="notes" maxlength="300" class="field-input"></div>
+        <div class="flex justify-end space-x-3">
+          <button type="button" data-close class="btn-secondary">Cancelar</button>
+          <button type="submit" class="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl">Confirmar recebimento</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -505,6 +607,18 @@
           </thead>
           <tbody id="reportTableBody" class="divide-y divide-slate-800/60 font-mono"></tbody>
         </table>
+        <div id="reportAgreementsBox" class="hidden space-y-2">
+          <h4 class="text-xs font-bold text-amber-300 uppercase tracking-wider pt-2"><i class="fa-solid fa-handshake mr-1"></i>Parcelas de acordo vencidas — <span id="repAcordoTotal"></span></h4>
+          <table class="w-full text-left border-collapse text-[11px]">
+            <thead>
+              <tr class="bg-slate-950 border-b border-slate-800 text-slate-400 uppercase">
+                <th class="p-2">Cliente / CPF</th><th class="p-2">Telefone</th><th class="p-2">Parcela</th>
+                <th class="p-2">Vencimento</th><th class="p-2">Atraso</th><th class="p-2">Valor</th>
+              </tr>
+            </thead>
+            <tbody id="reportAgreementsBody" class="divide-y divide-slate-800/60 font-mono"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -523,6 +637,7 @@
       <div class="flex-1 overflow-y-auto space-y-4 pr-1">
         <div id="dossierInfo" class="bg-slate-950 p-4 rounded-xl border border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs"></div>
         <div id="dossierDebt" class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs"></div>
+        <div id="dossierAgreement" class="hidden"></div>
         <div class="space-y-3">
           <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wider"><i class="fa-solid fa-comment-dots text-emerald-400 mr-2"></i>Ocorrências e histórico</h4>
           <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">

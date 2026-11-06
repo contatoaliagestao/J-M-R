@@ -20,6 +20,7 @@ const PAGE_HEADERS = {
 const ACTION_LABELS = {
   ROLAR: 'Rolagem (juros + diárias)',
   QUITAR: 'Quitação do contrato',
+  PARCELA_ACORDO: 'Parcela de acordo',
   OUTRA_ENTRADA: 'Outra entrada (sem contrato)',
   DESEMBOLSO: 'Desembolso de empréstimo',
   DESPESA: 'Despesa / tarifa',
@@ -133,7 +134,12 @@ function toast(message, type = 'info') {
 
 const handleError = err => { if (err.message !== '401') toast(err.message, 'error'); };
 
-function openModal(id) { $('#' + id).classList.remove('hidden'); }
+function openModal(id) {
+  const m = $('#' + id);
+  // Move para o fim da página: a janela aberta por último fica sempre por cima das outras
+  document.body.appendChild(m);
+  m.classList.remove('hidden');
+}
 function closeModal(id) { $('#' + id).classList.add('hidden'); }
 
 function formData(form) {
@@ -406,6 +412,15 @@ async function loadDashboard() {
   $('#countCiclo30').textContent = `${d.ciclo30} contratos`;
   $('#barCiclo15').style.width = `${d.ciclo15 / total * 100}%`;
   $('#barCiclo30').style.width = `${d.ciclo30 / total * 100}%`;
+  const a = d.acordos;
+  $('#acordoResumo').textContent = `${a.ativos} ativo${a.ativos === 1 ? '' : 's'} • ${a.concluidos} concluído${a.concluidos === 1 ? '' : 's'}`;
+  $('#acordoTotal').textContent = money(a.total_acordado_cents);
+  $('#acordoRecebido').textContent = money(a.recebido_cents);
+  $('#acordoAReceber').textContent = money(a.a_receber_cents);
+  $('#acordoAtrasado').textContent = `${money(a.atrasado_cents)}${a.parcelas_atrasadas ? ` (${a.parcelas_atrasadas})` : ''}`;
+  $('#acordoProx30').textContent = money(a.proximos_30d_cents);
+  $('#acordoReceita').textContent = money(a.receita_cents);
+  $('#acordoDesconto').textContent = money(a.desconto_concedido_cents);
 }
 
 // ===================== CONTRATOS =====================
@@ -419,6 +434,11 @@ async function loadContracts() {
 
 function statusBadge(c) {
   if (c.situation === 'QUITADO') return '<span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-400 font-bold border border-slate-700">Quitado</span>';
+  if (c.situation === 'ACORDO') {
+    const a = c.agreement;
+    const late = a && a.overdue_count > 0;
+    return `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${late ? 'bg-red-500/20 text-red-300 border-red-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}"><i class="fa-solid fa-handshake mr-1"></i>Acordo${a ? ` ${a.paid_count}/${a.installments_count}` : ''}${late ? ' • atrasado' : ''}</span>`;
+  }
   if (c.situation === 'ATRASADO') return `<span class="px-2 py-0.5 rounded-full text-[10px] bg-red-500/20 text-red-400 font-bold border border-red-500/30 whitespace-nowrap"><i class="fa-solid fa-clock mr-1"></i>${c.debt.overdueDays}d atraso</span>`;
   return '<span class="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">Em dia</span>';
 }
@@ -448,6 +468,7 @@ function renderContracts() {
   }
 
   tbody.innerHTML = list.map(c => {
+    if (c.situation === 'ACORDO') return agreementRow(c);
     const late = c.situation === 'ATRASADO';
     return `<tr class="hover:bg-slate-800/40 ${late ? 'bg-red-500/5' : ''}">
       <td class="py-3 px-4">
@@ -474,6 +495,34 @@ function renderContracts() {
   }).join('');
 }
 
+// Linha de contrato em acordo: mostra a próxima parcela e o saldo do acordo
+function agreementRow(c) {
+  const a = c.agreement || { remaining_cents: 0, overdue_count: 0, next_installment: null, total_cents: 0 };
+  const next = a.next_installment;
+  const late = a.overdue_count > 0;
+  return `<tr class="hover:bg-slate-800/40 ${late ? 'bg-red-500/5' : 'bg-amber-500/[0.03]'}">
+    <td class="py-3 px-4">
+      <button data-action="dossier" data-id="${c.id}" class="font-bold text-white hover:underline text-left">${esc(c.client_name)}</button>
+      <div class="text-[11px] text-slate-500"><span class="font-mono theme-accent-text font-semibold">${esc(c.code)}</span> • CPF: ${esc(c.cpf)}</div>
+      <div class="text-[10px] text-slate-400 truncate max-w-[220px]" title="${esc(c.address)}"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${esc(c.address)}</div>
+    </td>
+    <td class="py-3 px-4 font-mono font-bold text-slate-200">${money(c.principal_cents)}</td>
+    <td class="py-3 px-4"><div class="font-mono text-amber-300 font-bold">${money(a.total_cents)}</div><div class="text-[10px] text-slate-400">valor acordado</div></td>
+    <td class="py-3 px-4">${next
+      ? `<div class="font-mono ${late ? 'text-red-400 font-bold' : 'text-slate-300'}">${brDate(next.due_date)}</div><div class="text-[10px] text-slate-500">parcela ${next.number} • ${money(next.amount_cents)}</div>`
+      : '—'}</td>
+    <td class="py-3 px-4">${late
+      ? `<div class="font-mono text-red-400 font-bold">${a.overdue_count} parcela${a.overdue_count > 1 ? 's' : ''}</div><div class="text-[10px] text-red-300/80">${money(a.overdue_cents)} vencido</div>`
+      : '<span class="text-slate-500 text-[11px]">Sem diárias (acordo)</span>'}</td>
+    <td class="py-3 px-4"><div class="font-mono font-bold text-amber-400">${money(a.remaining_cents)}</div><div class="text-[10px] text-slate-500">saldo do acordo</div></td>
+    <td class="py-3 px-4">${statusBadge(c)}</td>
+    <td class="py-3 px-4"><div class="flex items-center justify-center gap-1.5">
+      <button data-action="dossier" data-id="${c.id}" class="bg-amber-500/90 hover:bg-amber-400 text-slate-950 px-2 py-1.5 rounded-lg text-xs font-bold"><i class="fa-solid fa-handshake text-[11px] mr-1"></i>Acordo</button>
+      <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" title="Abrir WhatsApp" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 p-1.5 rounded-lg text-xs border border-slate-700"><i class="fa-brands fa-whatsapp"></i></a>
+    </div></td>
+  </tr>`;
+}
+
 ['#searchContracts', '#filterCycle', '#filterStatus'].forEach(sel => {
   $(sel).addEventListener(sel === '#searchContracts' ? 'input' : 'change', renderContracts);
 });
@@ -493,14 +542,60 @@ function debtSummaryText(c) {
     `PARA QUITAR: ${money(c.debt.totalToSettle)}`;
 }
 
+function agreementDebtText(c) {
+  const a = c.agreement;
+  const overdue = a.installments.filter(i => i.status === 'PENDENTE' && i.overdue_days > 0);
+  return `ACORDO EM ATRASO\n` +
+    `Cliente: ${c.client_name} (CPF: ${c.cpf})\n` +
+    `Contrato: ${c.code}\n` +
+    `-----------------------------------------\n` +
+    overdue.map(i => `Parcela ${i.number}/${a.installments_count} - venc. ${brDate(i.due_date)} (${i.overdue_days} dias): ${money(i.amount_cents)}`).join('\n') + '\n' +
+    `-----------------------------------------\n` +
+    `TOTAL VENCIDO: ${money(a.overdue_cents)}\n` +
+    `SALDO DO ACORDO: ${money(a.remaining_cents)}`;
+}
+
+function agreementOverdueCard(c) {
+  const a = c.agreement;
+  const overdue = a.installments.filter(i => i.status === 'PENDENTE' && i.overdue_days > 0);
+  const maxDays = Math.max(...overdue.map(i => i.overdue_days));
+  return `
+    <div class="bg-slate-900 border border-amber-500/40 rounded-2xl p-5 flex flex-col justify-between">
+      <div>
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] font-mono theme-accent-text font-bold">${esc(c.code)}</span>
+            <span class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300"><i class="fa-solid fa-handshake mr-0.5"></i>ACORDO</span>
+            <button data-action="dossier" data-id="${c.id}" class="block text-sm font-bold text-white hover:underline text-left">${esc(c.client_name)}</button>
+            <p class="text-xs text-slate-400 font-mono">${esc(formatPhone(c.phone))} • CPF: ${esc(c.cpf)}</p>
+            <p class="text-[10px] text-slate-400 truncate mt-0.5"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${esc(c.address)}</p>
+          </div>
+          <span class="px-2 py-0.5 rounded-full text-[10px] bg-red-500 text-white font-bold whitespace-nowrap">${maxDays}d atrasado</span>
+        </div>
+        <div class="my-3 p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-xs">
+          ${overdue.map(i => `<div class="flex justify-between text-slate-400"><span>Parcela ${i.number}/${a.installments_count} (${brDate(i.due_date)}):</span><strong class="text-red-400 font-mono">${money(i.amount_cents)}</strong></div>`).join('')}
+          <div class="pt-1.5 border-t border-slate-800 flex justify-between font-bold text-white"><span>Saldo do acordo:</span><strong class="text-amber-400 font-mono">${money(a.remaining_cents)}</strong></div>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <div class="grid grid-cols-2 gap-2">
+          <button data-action="copy-agreement-debt" data-id="${c.id}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2 rounded-xl text-xs font-bold border border-slate-700"><i class="fa-regular fa-copy text-emerald-400 mr-1"></i>Copiar cobrança</button>
+          <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" class="bg-emerald-700 hover:bg-emerald-600 text-white py-2 rounded-xl text-xs font-bold text-center"><i class="fa-brands fa-whatsapp mr-1"></i>WhatsApp</a>
+        </div>
+        <button data-action="dossier" data-id="${c.id}" class="w-full bg-amber-500/90 hover:bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold"><i class="fa-solid fa-handshake mr-1"></i>Ver acordo${isManager() ? ' / receber parcela' : ''}</button>
+      </div>
+    </div>`;
+}
+
 function renderOverdue() {
   const list = state.contracts.filter(c => c.situation === 'ATRASADO').sort((a, b) => b.debt.overdueDays - a.debt.overdueDays);
+  const agreementsLate = state.contracts.filter(c => c.situation === 'ACORDO' && c.agreement && c.agreement.overdue_count > 0);
   const badge = $('#overdueBadge');
-  badge.textContent = list.length;
-  badge.classList.toggle('hidden', list.length === 0);
+  badge.textContent = list.length + agreementsLate.length;
+  badge.classList.toggle('hidden', list.length + agreementsLate.length === 0);
 
   const box = $('#overdueCards');
-  if (!list.length) {
+  if (!list.length && !agreementsLate.length) {
     box.innerHTML = `<div class="col-span-full panel p-8 text-center text-slate-400">
       <i class="fa-solid fa-circle-check text-4xl text-emerald-400 mb-3"></i>
       <h4 class="text-white font-bold">Nenhum contrato em atraso nesta empresa!</h4></div>`;
@@ -535,7 +630,7 @@ function renderOverdue() {
           ${isManager() ? `<button data-action="payment" data-id="${c.id}" class="bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-xl text-xs font-bold"><i class="fa-solid fa-hand-holding-dollar mr-1"></i>Baixa</button>` : ''}
         </div>
       </div>
-    </div>`).join('');
+    </div>`).join('') + agreementsLate.map(agreementOverdueCard).join('');
 }
 
 // ===================== NOVO EMPRÉSTIMO =====================
@@ -611,11 +706,177 @@ async function doPayment(kind, button) {
   });
 }
 
+// ===================== ACORDO =====================
+const agreementState = { contract: null, rows: [], renegotiation: false };
+
+function lastDayOfMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+function addMonths(iso, months, anchorDay) {
+  const [y, m] = iso.split('-').map(Number);
+  const total = (m - 1) + months;
+  const year = y + Math.floor(total / 12);
+  const month = (total % 12 + 12) % 12 + 1;
+  const day = Math.min(anchorDay, lastDayOfMonth(year, month));
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+const toCents = v => Math.round((Number(String(v).replace(',', '.')) || 0) * 100);
+const centsToInput = c => (c / 100).toFixed(2);
+
+function agreementInterval() {
+  const f = $('#agreementForm');
+  if (f.interval.value === 'CUSTOM') return Math.max(1, Number(f.custom_days.value) || 1);
+  return f.interval.value === 'MENSAL' ? 'MENSAL' : Number(f.interval.value);
+}
+
+// Gera as parcelas a partir do total, quantidade, 1ª data e intervalo (a diferença de centavos vai para a última)
+function generateInstallments() {
+  const f = $('#agreementForm');
+  const total = toCents(f.total.value);
+  const count = Math.min(120, Math.max(1, Number(f.count.value) || 1));
+  const first = f.first_date.value || state.today;
+  const interval = agreementInterval();
+  const base = Math.floor(total / count);
+  const anchor = Number(first.slice(8, 10));
+  agreementState.rows = Array.from({ length: count }, (_, i) => ({
+    due_date: interval === 'MENSAL' ? addMonths(first, i, anchor) : addDays(first, i * interval),
+    amount_cents: i === count - 1 ? total - base * (count - 1) : base,
+  }));
+  renderInstallmentsEditor();
+}
+
+function renderInstallmentsEditor() {
+  const rows = agreementState.rows;
+  $('#installmentsEditor').innerHTML = rows.map((r, i) => `
+    <tr class="border-b border-slate-800/60">
+      <td class="p-2 font-mono text-slate-400">${i + 1}</td>
+      <td class="p-1.5"><input type="date" data-inst-date="${i}" value="${esc(r.due_date)}" class="field-input py-1 font-mono"></td>
+      <td class="p-1.5"><input type="number" step="0.01" min="0.01" data-inst-amount="${i}" value="${centsToInput(r.amount_cents)}" class="field-input py-1 font-mono"></td>
+      <td class="p-1.5 text-center">${rows.length > 1 ? `<button type="button" data-action="remove-installment" data-id="${i}" class="text-slate-500 hover:text-red-400" title="Remover"><i class="fa-solid fa-trash"></i></button>` : ''}</td>
+    </tr>`).join('');
+  updateInstallmentsSum();
+}
+
+function updateInstallmentsSum() {
+  const total = toCents($('#agreementForm').total.value);
+  const sum = agreementState.rows.reduce((t, r) => t + r.amount_cents, 0);
+  const diff = total - sum;
+  const el = $('#installmentsSum');
+  el.className = `text-[11px] font-mono text-right ${diff === 0 ? 'text-emerald-400' : 'text-red-400'}`;
+  el.textContent = diff === 0
+    ? `Soma das parcelas: ${money(sum)} ✓`
+    : `Soma das parcelas: ${money(sum)} — ${diff > 0 ? 'faltam' : 'sobram'} ${money(Math.abs(diff))} para fechar ${money(total)}`;
+}
+
+function openAgreementModal(contract, renegotiation) {
+  agreementState.contract = contract;
+  agreementState.renegotiation = renegotiation;
+  const f = $('#agreementForm');
+  f.reset();
+  const a = contract.agreement;
+  const reference = renegotiation && a ? a.remaining_cents : contract.debt.totalToSettle;
+  $('#agreementTitle').innerHTML = `<i class="fa-solid fa-handshake text-amber-400 mr-2"></i>${renegotiation ? 'Renegociar acordo' : 'Novo acordo de pagamento'}`;
+  $('#agreementSub').textContent = `${contract.client_name} (${contract.code})`;
+  $('#agreementDebtInfo').innerHTML = renegotiation && a ? `
+      <div><span class="text-slate-400 text-[11px] block">Acordo atual</span><strong class="font-mono text-white">${money(a.total_cents)}</strong></div>
+      <div><span class="text-slate-400 text-[11px] block">Já recebido</span><strong class="font-mono text-emerald-400">${money(a.paid_cents)}</strong></div>
+      <div><span class="text-slate-400 text-[11px] block">Saldo a renegociar</span><strong class="font-mono text-amber-400">${money(a.remaining_cents)}</strong></div>`
+    : `
+      <div><span class="text-slate-400 text-[11px] block">Principal + juros</span><strong class="font-mono text-white">${money(contract.debt.initialTotal)}</strong></div>
+      <div><span class="text-slate-400 text-[11px] block">Diárias (${contract.debt.overdueDays} dias)</span><strong class="font-mono text-red-400">${money(contract.debt.lateFee)}</strong></div>
+      <div><span class="text-slate-400 text-[11px] block">Dívida total hoje</span><strong class="font-mono text-amber-400">${money(contract.debt.totalToSettle)}</strong></div>`;
+  f.total.value = centsToInput(reference);
+  f.count.value = 3;
+  f.first_date.value = state.today;
+  f.interval.value = 'MENSAL';
+  $('#customDaysBox').classList.add('hidden');
+  generateInstallments();
+  closeModal('paymentModal');
+  openModal('agreementModal');
+}
+
+// Mudanças nos campos que definem o parcelamento regeneram as parcelas
+$('#agreementForm').addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.instDate !== undefined) { agreementState.rows[Number(t.dataset.instDate)].due_date = t.value; return; }
+  if (t.dataset.instAmount !== undefined) { agreementState.rows[Number(t.dataset.instAmount)].amount_cents = toCents(t.value); return updateInstallmentsSum(); }
+  if (['total', 'count', 'first_date', 'custom_days'].includes(t.name)) generateInstallments();
+});
+$('#agreementForm').interval.addEventListener('change', e => {
+  $('#customDaysBox').classList.toggle('hidden', e.target.value !== 'CUSTOM');
+  generateInstallments();
+});
+
+$('#agreementForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target;
+  const c = agreementState.contract;
+  const total = toCents(f.total.value);
+  const rows = agreementState.rows;
+  if (rows.some(r => !r.due_date || r.amount_cents <= 0)) return toast('Confira as datas e valores de todas as parcelas.', 'warning');
+  if (rows.reduce((t, r) => t + r.amount_cents, 0) !== total) return toast('A soma das parcelas precisa ser igual ao valor acordado.', 'warning');
+  const msg = `${agreementState.renegotiation ? 'Renegociar' : 'Gravar acordo'} para ${c.client_name}: ${money(total)} em ${rows.length} parcela${rows.length > 1 ? 's' : ''}?` +
+    (agreementState.renegotiation ? '\n\nO acordo atual será substituído por este.' : '\n\nO contrato para de acumular diárias.');
+  if (!confirm(msg)) return;
+  await withBusy(f.querySelector('[type=submit]'), async () => {
+    try {
+      await companyApi('POST', `/contracts/${c.id}/agreement`, {
+        total: total / 100,
+        installments: rows.map(r => ({ due_date: r.due_date, amount: r.amount_cents / 100 })),
+        notes: f.notes.value.trim(),
+      });
+      closeModal('agreementModal');
+      toast(agreementState.renegotiation ? 'Acordo renegociado.' : 'Acordo gravado.', 'success');
+      await refresh();
+      openDossier(c.id);
+    } catch (err) { handleError(err); }
+  });
+});
+
+// Receber parcela
+const installmentPayState = { agreementId: null, installmentId: null };
+function openInstallmentPay(agreementId, installmentId) {
+  const c = state.dossierContract;
+  const inst = c && c.agreement && c.agreement.installments.find(i => i.id === installmentId);
+  if (!inst) return;
+  installmentPayState.agreementId = agreementId;
+  installmentPayState.installmentId = installmentId;
+  const f = $('#installmentPayForm');
+  f.reset();
+  f.amount.value = centsToInput(inst.amount_cents);
+  $('#installmentPaySub').textContent = `${c.client_name} — parcela ${inst.number}/${c.agreement.installments_count}, vencimento ${brDate(inst.due_date)}`;
+  openModal('installmentPayModal');
+}
+
+$('#installmentPayForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = formData(e.target);
+  await withBusy(e.target.querySelector('[type=submit]'), async () => {
+    try {
+      const r = await companyApi('POST', `/agreements/${installmentPayState.agreementId}/installments/${installmentPayState.installmentId}/pay`,
+        { amount: Number(f.amount), channel: f.channel, notes: f.notes });
+      closeModal('installmentPayModal');
+      toast(r.concluded ? 'Última parcela recebida: acordo concluído e contrato quitado!' : 'Parcela recebida.', 'success');
+      await refresh();
+      openDossier(state.dossierContractId);
+    } catch (err) { handleError(err); }
+  });
+});
+
+async function cancelAgreement(agreementId) {
+  if (!confirm('Cancelar este acordo? O contrato volta às condições originais e as diárias voltam a contar desde o vencimento.')) return;
+  try {
+    await companyApi('POST', `/agreements/${agreementId}/cancel`, {});
+    toast('Acordo cancelado.', 'info');
+    await refresh();
+    openDossier(state.dossierContractId);
+  } catch (err) { handleError(err); }
+}
+
 // ===================== DOSSIÊ =====================
 async function openDossier(id) {
   state.dossierContractId = id;
   try {
-    const { contract: c, occurrences } = await companyApi('GET', `/contracts/${id}`);
+    const { contract: c, occurrences, agreements_history: history } = await companyApi('GET', `/contracts/${id}`);
+    state.dossierContract = c;
     $('#dossierName').textContent = c.client_name;
     $('#dossierCode').textContent = c.code;
     $('#dossierInfo').innerHTML = `
@@ -629,8 +890,9 @@ async function openDossier(id) {
     $('#dossierDebt').innerHTML = `
       <div><span class="text-slate-400 text-[11px]">Principal / taxa</span><div class="font-mono font-bold text-white">${money(c.principal_cents)} (${c.rate}% / ${c.cycle_days}d)</div></div>
       <div><span class="text-slate-400 text-[11px]">Situação</span><div class="mt-0.5">${statusBadge(c)}</div></div>
-      <div><span class="text-slate-400 text-[11px]">Vencimento</span><div class="font-mono font-bold text-slate-300">${c.status === 'QUITADO' ? 'Quitado em ' + brDate(c.settled_at) : brDate(c.due_date)}</div></div>
-      <div><span class="text-slate-400 text-[11px]">Total p/ quitar</span><div class="font-mono font-bold text-emerald-400">${c.status === 'QUITADO' ? '—' : money(c.debt.totalToSettle)}</div></div>`;
+      <div><span class="text-slate-400 text-[11px]">Vencimento</span><div class="font-mono font-bold text-slate-300">${c.status === 'QUITADO' ? 'Quitado em ' + brDate(c.settled_at) : (c.in_agreement ? 'Em acordo' : brDate(c.due_date))}</div></div>
+      <div><span class="text-slate-400 text-[11px]">${c.in_agreement ? 'Saldo do acordo' : 'Total p/ quitar'}</span><div class="font-mono font-bold ${c.in_agreement ? 'text-amber-400' : 'text-emerald-400'}">${c.status === 'QUITADO' ? '—' : money(c.in_agreement && c.agreement ? c.agreement.remaining_cents : c.debt.totalToSettle)}</div></div>`;
+    renderDossierAgreement(c, history || []);
     $('#occurrenceInput').value = '';
     $('#occurrencesList').innerHTML = occurrences.length ? occurrences.map(o => {
       const color = o.author_role === 'SISTEMA' ? 'bg-slate-700 text-slate-300' : (o.author_role === 'OPERADOR' ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400');
@@ -643,6 +905,60 @@ async function openDossier(id) {
     }).join('') : '<div class="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-center text-slate-500 text-xs">Nenhuma ocorrência registrada.</div>';
     openModal('dossierModal');
   } catch (err) { handleError(err); }
+}
+
+function renderDossierAgreement(c, history) {
+  const box = $('#dossierAgreement');
+  const a = c.agreement;
+  const past = history.filter(h => !a || h.id !== a.id);
+  if (!a && !past.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const statusLabel = { ATIVO: 'Ativo', CONCLUIDO: 'Concluído', CANCELADO: 'Cancelado / substituído' };
+  let html = '';
+  if (a) {
+    const canCancel = isManager() && a.paid_count === 0 && !a.renegotiated;
+    html += `
+      <div class="bg-amber-500/5 border border-amber-500/30 rounded-xl p-4 space-y-3 text-xs">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h4 class="font-bold text-amber-300 uppercase tracking-wider"><i class="fa-solid fa-handshake mr-1"></i>Acordo ${a.renegotiated ? '(renegociado)' : ''} — firmado em ${esc(brDateTime(a.created_at).split(' às')[0])}</h4>
+          ${isManager() ? `<div class="flex gap-2">
+            <button data-action="renegotiate" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold"><i class="fa-solid fa-rotate mr-1"></i>Renegociar</button>
+            ${canCancel ? `<button data-action="cancel-agreement" data-id="${a.id}" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-300 font-semibold"><i class="fa-solid fa-ban mr-1"></i>Cancelar acordo</button>` : ''}
+          </div>` : ''}
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div><span class="text-slate-400 text-[11px]">Valor acordado</span><div class="font-mono font-bold text-white">${money(a.total_cents)}</div></div>
+          <div><span class="text-slate-400 text-[11px]">Recebido</span><div class="font-mono font-bold text-emerald-400">${money(a.paid_cents)} (${a.paid_count}/${a.installments_count})</div></div>
+          <div><span class="text-slate-400 text-[11px]">Falta receber</span><div class="font-mono font-bold text-amber-400">${money(a.remaining_cents)}</div></div>
+          <div><span class="text-slate-400 text-[11px]">Dívida de referência / desconto</span><div class="font-mono font-bold text-slate-300">${money(a.debt_at_agreement_cents)}${a.discount_cents ? ` <span class="text-rose-300">(-${money(a.discount_cents)})</span>` : ''}</div></div>
+        </div>
+        ${a.notes ? `<div class="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5 text-slate-300 whitespace-pre-wrap"><span class="text-slate-500 text-[10px] uppercase font-bold block mb-0.5">Condições</span>${esc(a.notes)}</div>` : ''}
+        <table class="w-full text-xs">
+          <thead><tr class="text-slate-400 border-b border-slate-800"><th class="py-1.5 text-left">Parcela</th><th class="text-left">Vencimento</th><th class="text-left">Valor</th><th class="text-left">Situação</th><th></th></tr></thead>
+          <tbody class="divide-y divide-slate-800/60">
+            ${a.installments.map(i => {
+              const paid = i.status === 'PAGO';
+              const late = !paid && i.overdue_days > 0;
+              const sit = paid
+                ? `<span class="text-emerald-400 font-semibold"><i class="fa-solid fa-circle-check mr-1"></i>Pago em ${brDate(i.paid_at)} (${money(i.paid_cents)})</span>`
+                : (late ? `<span class="text-red-400 font-semibold">${i.overdue_days}d em atraso</span>` : '<span class="text-slate-400">A vencer</span>');
+              return `<tr class="${late ? 'bg-red-500/5' : ''}">
+                <td class="py-1.5 font-mono">${i.number}/${a.installments_count}</td>
+                <td class="font-mono ${late ? 'text-red-400 font-bold' : 'text-slate-300'}">${brDate(i.due_date)}</td>
+                <td class="font-mono text-white">${money(i.amount_cents)}</td>
+                <td>${sit}</td>
+                <td class="text-right">${!paid && isManager() ? `<button data-action="pay-installment" data-agreement="${a.id}" data-id="${i.id}" class="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Receber</button>` : ''}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+  if (past.length) {
+    html += `<div class="text-[11px] text-slate-500 mt-2 space-y-0.5"><span class="font-bold uppercase">Acordos anteriores:</span>
+      ${past.map(h => `<div>• ${esc(brDateTime(h.created_at).split(' às')[0])}: ${money(h.total_cents)} — ${statusLabel[h.status]}${h.closed_at ? ` em ${brDate(h.closed_at)}` : ''}</div>`).join('')}</div>`;
+  }
+  box.innerHTML = html;
+  box.classList.remove('hidden');
 }
 
 async function addOccurrence(button) {
@@ -675,7 +991,19 @@ async function openReport() {
         <td class="p-2 text-amber-400 font-bold">${c.debt.overdueDays} dias</td>
         <td class="p-2 text-amber-400">${money(c.debt.lateFee)}</td>
         <td class="p-2 text-emerald-400 font-bold">${money(c.debt.totalToSettle)}</td>
-      </tr>`).join('') : '<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum inadimplente.</td></tr>';
+      </tr>`).join('') : '<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum contrato em atraso.</td></tr>';
+    const ai = r.agreement_installments || [];
+    $('#reportAgreementsBox').classList.toggle('hidden', !ai.length);
+    $('#repAcordoTotal').textContent = money(r.total_parcelas_atrasadas_cents || 0);
+    $('#reportAgreementsBody').innerHTML = ai.map(x => `
+      <tr class="text-slate-300">
+        <td class="p-2"><strong class="text-white">${esc(x.client_name)}</strong><br><span class="text-slate-500">${esc(x.code)} - ${esc(x.cpf)}</span></td>
+        <td class="p-2">${esc(formatPhone(x.phone))}</td>
+        <td class="p-2">${x.number}/${x.of}</td>
+        <td class="p-2 text-red-400 font-bold">${brDate(x.due_date)}</td>
+        <td class="p-2 text-amber-400 font-bold">${x.overdue_days} dias</td>
+        <td class="p-2 text-emerald-400 font-bold">${money(x.amount_cents)}</td>
+      </tr>`).join('');
     openModal('reportModal');
   } catch (err) { handleError(err); }
 }
@@ -705,16 +1033,19 @@ function renderBank() {
   tbody.innerHTML = transactions.map(tx => {
     const credit = tx.amount_cents > 0;
     const done = tx.status === 'CONCILIADO';
-    const actions = credit ? ['ROLAR', 'QUITAR', 'OUTRA_ENTRADA'] : ['DESEMBOLSO', 'DESPESA'];
+    const actions = credit ? ['ROLAR', 'QUITAR', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'] : ['DESEMBOLSO', 'DESPESA'];
 
     let contractCell;
     if (done) {
       contractCell = tx.contract ? `<div class="font-bold text-slate-200">${esc(tx.contract.client_name)}</div><div class="text-[11px] text-slate-400 font-mono">${esc(tx.contract.code)}</div>`
         : '<span class="text-[11px] text-slate-500">—</span>';
     } else {
-      const opts = active_contracts.map(c => `<option value="${c.id}" ${c.id === tx.contract_id ? 'selected' : ''}>${esc(c.code)} - ${esc(c.client_name)}</option>`).join('');
+      const opts = active_contracts.map(c => `<option value="${c.id}" ${c.id === tx.contract_id ? 'selected' : ''}>${esc(c.code)} - ${esc(c.client_name)}${c.in_agreement ? ' (acordo)' : ''}</option>`).join('');
       contractCell = `<select data-tx-contract="${tx.id}" class="field-input py-1 text-xs max-w-[220px]"><option value="">Sem vínculo</option>${opts}</select>`;
-      if (tx.contract && tx.contract.status === 'ATIVO') {
+      if (tx.contract && tx.contract.status === 'ATIVO' && tx.contract.in_agreement) {
+        const ni = tx.contract.next_installment;
+        contractCell += `<div class="text-[10px] text-amber-300/80 mt-1 font-mono">${ni ? `Próx. parcela ${ni.number}: ${money(ni.amount_cents)} (${brDate(ni.due_date)})` : 'Acordo sem parcelas pendentes'}</div>`;
+      } else if (tx.contract && tx.contract.status === 'ATIVO') {
         const d = tx.contract.debt;
         contractCell += `<div class="text-[10px] text-slate-500 mt-1 font-mono">Rolar: ${money(d.totalToRollover)} • Quitar: ${money(d.totalToSettle)}</div>`;
       }
@@ -763,7 +1094,15 @@ async function validateTx(id, button) {
   const action = $(`[data-tx-action="${id}"]`).value;
   const contractId = Number($(`[data-tx-contract="${id}"]`).value) || null;
   if (!action) return toast('Escolha a natureza da transação.', 'warning');
-  if ((action === 'ROLAR' || action === 'QUITAR') && !contractId) return toast('Vincule um contrato.', 'warning');
+  if ((action === 'ROLAR' || action === 'QUITAR' || action === 'PARCELA_ACORDO') && !contractId) return toast('Vincule um contrato.', 'warning');
+  if (action === 'PARCELA_ACORDO') {
+    const c = state.contracts.find(x => x.id === contractId);
+    const ni = c && c.agreement && c.agreement.next_installment;
+    if (ni && Math.abs(ni.amount_cents - tx.amount_cents) > 5) {
+      const ok = confirm(`Atenção: o valor recebido (${money(tx.amount_cents)}) é diferente da próxima parcela do acordo (${money(ni.amount_cents)}).\n\nDeseja registrar mesmo assim?`);
+      if (!ok) return;
+    }
+  }
 
   if (contractId && (action === 'ROLAR' || action === 'QUITAR')) {
     const c = state.contracts.find(x => x.id === contractId);
@@ -997,6 +1336,23 @@ document.addEventListener('click', e => {
     case 'payment': return openPayment(id);
     case 'do-rollover': return doPayment('rollover', el);
     case 'do-settle': return doPayment('settle', el);
+    case 'open-agreement': return state.paymentContract && openAgreementModal(state.paymentContract, false);
+    case 'renegotiate': return state.dossierContract && openAgreementModal(state.dossierContract, true);
+    case 'regen-installments': return generateInstallments();
+    case 'add-installment': {
+      const rows = agreementState.rows;
+      const last = rows[rows.length - 1];
+      const interval = agreementInterval();
+      rows.push({ due_date: last ? (interval === 'MENSAL' ? addMonths(last.due_date, 1, Number(last.due_date.slice(8, 10))) : addDays(last.due_date, interval)) : state.today, amount_cents: 0 });
+      return renderInstallmentsEditor();
+    }
+    case 'remove-installment': agreementState.rows.splice(id, 1); return renderInstallmentsEditor();
+    case 'pay-installment': return openInstallmentPay(Number(el.dataset.agreement), id);
+    case 'cancel-agreement': return cancelAgreement(id);
+    case 'copy-agreement-debt': {
+      const c = state.contracts.find(x => x.id === id);
+      return c && c.agreement && copyText(agreementDebtText(c), `Cobrança do acordo de ${c.client_name} copiada.`);
+    }
     case 'add-occurrence': return addOccurrence(el);
     case 'copy-debt': {
       const c = state.contracts.find(x => x.id === id);

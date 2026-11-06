@@ -269,3 +269,120 @@ test('administrador edita o nome de usuário', async () => {
   // Salvar sem mudar o nome não dá erro
   assert.strictEqual((await admin('PUT', `/api/users/${renata.id}`, { username: 'renata.gestora', name: 'Renata' })).status, 200);
 });
+
+test('acordo: criação, parcelas, extrato, renegociação, conclusão e dashboard', async () => {
+  const today = todayIso();
+  const base = `/api/companies/${empresa1}`;
+  const dash = async () => (await admin('GET', `${base}/dashboard`)).data.dashboard;
+  const before = await dash();
+
+  // Contrato de R$ 2.000 a 20%, vencido há 4 dias: dívida para quitar = R$ 3.360
+  const r = await admin('POST', `${base}/contracts`, {
+    client_name: 'Jose Acordo Silva', cpf: '321', phone: '11955554444', address: 'Rua Acordo', principal: 2000, rate: 20,
+    late_fee_rate: 10, cycle_days: 30, start_date: addDaysIso(today, -34),
+  });
+  const id = r.data.contract.id;
+  assert.strictEqual(r.data.contract.debt.totalToSettle, 336000);
+
+  const parcelas = [
+    { due_date: today, amount: 1000 },
+    { due_date: addDaysIso(today, 10), amount: 1000 },
+    { due_date: addDaysIso(today, 20), amount: 1000 },
+  ];
+
+  // Operador não faz acordo; soma diferente do total é recusada
+  assert.strictEqual((await operador('POST', `${base}/contracts/${id}/agreement`, { total: 3000, installments: parcelas })).status, 401); // operador foi desativado antes
+  assert.strictEqual((await admin('POST', `${base}/contracts/${id}/agreement`, { total: 3100, installments: parcelas })).status, 400);
+
+  const ag = await admin('POST', `${base}/contracts/${id}/agreement`, { total: 3000, installments: parcelas, notes: 'Pagamento a cada 10 dias' });
+  assert.strictEqual(ag.status, 201);
+  // Não pode ter dois acordos ativos ao mesmo tempo sem ser renegociação controlada (o 2º substitui o 1º)
+
+  let ct = (await admin('GET', `${base}/contracts/${id}`)).data;
+  assert.strictEqual(ct.contract.situation, 'ACORDO');
+  assert.strictEqual(ct.contract.debt.lateFee, 0); // parou de acumular diárias
+  assert.strictEqual(ct.contract.agreement.remaining_cents, 300000);
+  assert.strictEqual(ct.contract.agreement.discount_cents, 36000);
+  assert.strictEqual(ct.contract.agreement.installments.length, 3);
+
+  // Rolagem/quitação normais ficam bloqueadas
+  assert.strictEqual((await admin('POST', `${base}/contracts/${id}/rollover`, { channel: 'DINHEIRO' })).status, 400);
+
+  let d = await dash();
+  assert.strictEqual(d.acordos.ativos, before.acordos.ativos + 1);
+  assert.strictEqual(d.acordos.a_receber_cents - before.acordos.a_receber_cents, 300000);
+  assert.strictEqual(d.acordos.desconto_concedido_cents - before.acordos.desconto_concedido_cents, 36000);
+  assert.strictEqual(d.capital_alocado_cents - before.capital_alocado_cents, 200000); // principal ainda na rua
+
+  // Recebe a 1ª parcela em dinheiro: abate o principal primeiro
+  const aid = ct.contract.agreement.id;
+  const i1 = ct.contract.agreement.installments[0].id;
+  assert.strictEqual((await admin('POST', `${base}/agreements/${aid}/installments/${i1}/pay`, { channel: 'DINHEIRO' })).status, 200);
+  assert.strictEqual((await admin('POST', `${base}/agreements/${aid}/installments/${i1}/pay`, { channel: 'DINHEIRO' })).status, 400);
+  d = await dash();
+  assert.strictEqual(d.acordos.recebido_cents - before.acordos.recebido_cents, 100000);
+  assert.strictEqual(d.capital_alocado_cents - before.capital_alocado_cents, 100000);
+  assert.strictEqual(d.receita_realizada_cents, before.receita_realizada_cents); // ainda é devolução de principal
+
+  // 2ª parcela chega pelo extrato: sugestão automática "Parcela de acordo"
+  const dt = today.replace(/-/g, '');
+  await admin('POST', `${base}/bank/import`, { content: `<OFX><STMTTRN><DTPOSTED>${dt}<TRNAMT>1000.00<FITID>AC1<MEMO>PIX JOSE ACORDO SILVA</STMTTRN></OFX>` });
+  const tx = (await admin('GET', `${base}/bank`)).data.transactions.find(t => t.fitid === 'AC1');
+  assert.strictEqual(tx.contract_id, id);
+  assert.strictEqual(tx.action, 'PARCELA_ACORDO');
+  assert.strictEqual((await admin('POST', `${base}/bank/${tx.id}/validate`, { action: 'ROLAR', contract_id: id })).status, 400);
+  assert.strictEqual((await admin('POST', `${base}/bank/${tx.id}/validate`, { action: 'PARCELA_ACORDO', contract_id: id })).status, 200);
+
+  ct = (await admin('GET', `${base}/contracts/${id}`)).data;
+  assert.strictEqual(ct.contract.agreement.paid_count, 2);
+  assert.strictEqual(ct.contract.agreement.remaining_cents, 100000);
+
+  // Cliente não paga a 3ª; renegocia o saldo para R$ 900 em parcela única
+  const reneg = await admin('POST', `${base}/contracts/${id}/agreement`, { total: 900, installments: [{ due_date: addDaysIso(today, 5), amount: 900 }] });
+  assert.strictEqual(reneg.status, 201);
+  ct = (await admin('GET', `${base}/contracts/${id}`)).data;
+  assert.strictEqual(ct.contract.agreement.debt_at_agreement_cents, 136000); // 3.360 - 2.000 já pagos
+  assert.strictEqual(ct.contract.agreement.renegotiated, true);
+  assert.strictEqual(ct.agreements_history.filter(a => a.status === 'CANCELADO').length, 1);
+  // Renegociação não pode ser simplesmente cancelada
+  assert.strictEqual((await admin('POST', `${base}/agreements/${ct.contract.agreement.id}/cancel`, {})).status, 400);
+
+  // Paga a parcela única: o principal já foi recuperado, então tudo é receita; acordo concluído e contrato quitado
+  const pay = await admin('POST', `${base}/agreements/${ct.contract.agreement.id}/installments/${ct.contract.agreement.installments[0].id}/pay`, { channel: 'PIX_MANUAL' });
+  assert.strictEqual(pay.data.concluded, true);
+  ct = (await admin('GET', `${base}/contracts/${id}`)).data;
+  assert.strictEqual(ct.contract.status, 'QUITADO');
+  assert.strictEqual(ct.contract.situation, 'QUITADO');
+  assert.ok(ct.occurrences.some(o => /Acordo concluído/.test(o.text)));
+
+  d = await dash();
+  assert.strictEqual(d.receita_realizada_cents - before.receita_realizada_cents, 90000);
+  assert.strictEqual(d.acordos.concluidos - before.acordos.concluidos, 1);
+  assert.strictEqual(d.acordos.desconto_concedido_cents - before.acordos.desconto_concedido_cents, 46000); // 3.360 - 2.000 - 900
+  assert.strictEqual(d.capital_alocado_cents, before.capital_alocado_cents);
+});
+
+test('acordo: parcela vencida vai para a cobrança; acordo sem pagamento pode ser cancelado', async () => {
+  const today = todayIso();
+  const base = `/api/companies/${empresa1}`;
+  const r = await admin('POST', `${base}/contracts`, {
+    client_name: 'Maria Parcela', cpf: '654', phone: '11944443333', address: 'Rua P', principal: 1000, rate: 10, cycle_days: 15, start_date: addDaysIso(today, -20),
+  });
+  const id = r.data.contract.id;
+  await admin('POST', `${base}/contracts/${id}/agreement`, {
+    total: 1200, installments: [{ due_date: addDaysIso(today, -3), amount: 600 }, { due_date: addDaysIso(today, 27), amount: 600 }],
+  });
+  const rep = (await admin('GET', `${base}/report/overdue`)).data;
+  const item = rep.agreement_installments.find(x => x.contract_id === id);
+  assert.ok(item);
+  assert.strictEqual(item.overdue_days, 3);
+  assert.strictEqual(item.number, 1);
+  assert.ok(!rep.contracts.some(x => x.id === id)); // não aparece duplicado como contrato atrasado
+
+  const ct = (await admin('GET', `${base}/contracts/${id}`)).data.contract;
+  assert.strictEqual(ct.agreement.overdue_count, 1);
+  assert.strictEqual((await admin('POST', `${base}/agreements/${ct.agreement.id}/cancel`, {})).status, 200);
+  const after = (await admin('GET', `${base}/contracts/${id}`)).data.contract;
+  assert.strictEqual(after.situation, 'ATRASADO');
+  assert.strictEqual(after.agreement, null);
+});

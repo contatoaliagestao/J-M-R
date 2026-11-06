@@ -97,17 +97,66 @@ function publicUser(u) {
   return { id: u.id, name: u.name, email: u.email || null, username: u.username || null, role: u.role };
 }
 
-function contractView(c, today) {
+function contractView(c, today, agreement = null) {
   const debt = finance.calculateDebt(c, today);
+  let situation = debt.overdueDays > 0 ? 'ATRASADO' : 'EM_DIA';
+  if (c.status === 'QUITADO') situation = 'QUITADO';
+  else if (c.in_agreement) situation = 'ACORDO';
   return {
     id: c.id, code: c.code, client_name: c.client_name, cpf: c.cpf, phone: c.phone,
     address: c.address, social_media: c.social_media,
     principal_cents: c.principal_cents, rate: c.rate, late_fee_rate: c.late_fee_rate,
     cycle_days: c.cycle_days, start_date: c.start_date, due_date: c.due_date,
     status: c.status, rollover_count: c.rollover_count, settled_at: c.settled_at,
-    situation: c.status === 'QUITADO' ? 'QUITADO' : (debt.overdueDays > 0 ? 'ATRASADO' : 'EM_DIA'),
+    in_agreement: !!c.in_agreement,
+    situation,
     debt,
+    agreement: c.in_agreement ? agreement : null,
   };
+}
+
+// Resumo dos acordos ATIVOS de uma empresa (ou de um contrato), por contrato.
+async function agreementSummaries(db, companyId, today, contractId = null) {
+  const rows = (await db.prepare(`
+    SELECT a.id AS agreement_id, a.contract_id, a.total_cents, a.debt_at_agreement_cents, a.principal_at_agreement_cents,
+           a.notes, a.created_at, a.replaces_id,
+           COALESCE((SELECT SUM(principal_cents) FROM ledger WHERE agreement_id = a.id), 0) AS principal_recovered_cents,
+           i.id AS inst_id, i.number, i.due_date, i.amount_cents, i.status, i.paid_cents, i.paid_at, i.channel, i.notes AS inst_notes
+    FROM agreements a JOIN agreement_installments i ON i.agreement_id = a.id
+    WHERE a.company_id = ? AND a.status = 'ATIVO' ${contractId ? 'AND a.contract_id = ?' : ''}
+    ORDER BY a.id, i.number`).bind(...(contractId ? [companyId, contractId] : [companyId])).all()).results;
+
+  const map = new Map();
+  for (const r of rows) {
+    let a = map.get(r.contract_id);
+    if (!a) {
+      a = {
+        id: r.agreement_id, contract_id: r.contract_id, total_cents: r.total_cents,
+        debt_at_agreement_cents: r.debt_at_agreement_cents, discount_cents: Math.max(0, r.debt_at_agreement_cents - r.total_cents),
+        principal_pending_cents: Math.max(0, r.principal_at_agreement_cents - r.principal_recovered_cents),
+        notes: r.notes, created_at: r.created_at, renegotiated: !!r.replaces_id,
+        paid_cents: 0, remaining_cents: 0, installments_count: 0, paid_count: 0,
+        overdue_count: 0, overdue_cents: 0, next_installment: null, installments: [],
+      };
+      map.set(r.contract_id, a);
+    }
+    a.installments_count++;
+    const inst = {
+      id: r.inst_id, number: r.number, due_date: r.due_date, amount_cents: r.amount_cents, status: r.status,
+      paid_cents: r.paid_cents, paid_at: r.paid_at, channel: r.channel, notes: r.inst_notes,
+      overdue_days: r.status === 'PENDENTE' ? Math.max(0, finance.diffDaysIso(today, r.due_date)) : 0,
+    };
+    a.installments.push(inst);
+    if (r.status === 'PAGO') {
+      a.paid_count++;
+      a.paid_cents += r.paid_cents;
+    } else {
+      a.remaining_cents += r.amount_cents;
+      if (!a.next_installment) a.next_installment = inst;
+      if (inst.overdue_days > 0) { a.overdue_count++; a.overdue_cents += r.amount_cents; }
+    }
+  }
+  return map;
 }
 
 async function allowedCompanies(db, user) {
@@ -442,7 +491,7 @@ company.get('/dashboard', managerOnly, async c => {
   const db = c.get('db');
   const cid = c.get('company').id;
   const today = finance.todayIso();
-  const active = (await db.prepare("SELECT * FROM contracts WHERE company_id = ? AND status = 'ATIVO'").bind(cid).all()).results;
+  const active = (await db.prepare("SELECT * FROM contracts WHERE company_id = ? AND status = 'ATIVO' AND in_agreement = 0").bind(cid).all()).results;
   const s = {
     capital_alocado_cents: 0, receita_a_entrar_cents: 0, contratos_ativos: active.length,
     em_atraso: 0, ciclo15: 0, ciclo30: 0, outros_ciclos: 0, total_rolagens: 0, ultimo_vencimento: null,
@@ -458,7 +507,8 @@ company.get('/dashboard', managerOnly, async c => {
   }
   const t = await db.prepare(`
     SELECT
-      COALESCE(SUM(CASE WHEN type IN ('ROLAGEM','QUITACAO') THEN revenue_cents END), 0) AS receita,
+      COALESCE(SUM(CASE WHEN type IN ('ROLAGEM','QUITACAO','PARCELA_ACORDO') THEN revenue_cents END), 0) AS receita,
+      COALESCE(SUM(CASE WHEN type = 'PARCELA_ACORDO' THEN revenue_cents END), 0) AS receita_acordos,
       COALESCE(SUM(CASE WHEN type = 'OUTRA_ENTRADA' THEN amount_cents END), 0) AS outras,
       COALESCE(SUM(CASE WHEN type = 'DESPESA' THEN -amount_cents END), 0) AS despesas
     FROM ledger WHERE company_id = ?`).bind(cid).first();
@@ -467,14 +517,40 @@ company.get('/dashboard', managerOnly, async c => {
   s.despesas_cents = t.despesas;
   s.lucro_liquido_cents = t.receita + t.outras - t.despesas;
   s.taxa_atraso = active.length ? Math.round(s.em_atraso / active.length * 100) : 0;
+
+  // Acordos
+  const agreements = [...(await agreementSummaries(db, cid, today)).values()];
+  const in30 = finance.addDaysIso(today, 30);
+  const discount = await db.prepare(`SELECT COALESCE(SUM(MAX(0, debt_at_agreement_cents - total_cents)), 0) AS d
+    FROM agreements WHERE company_id = ? AND status IN ('ATIVO','CONCLUIDO')`).bind(cid).first();
+  const concluded = await db.prepare("SELECT COUNT(*) AS n FROM agreements WHERE company_id = ? AND status = 'CONCLUIDO'").bind(cid).first();
+  s.acordos = {
+    ativos: agreements.length,
+    concluidos: concluded.n,
+    total_acordado_cents: agreements.reduce((t, a) => t + a.total_cents, 0),
+    recebido_cents: agreements.reduce((t, a) => t + a.paid_cents, 0),
+    a_receber_cents: agreements.reduce((t, a) => t + a.remaining_cents, 0),
+    parcelas_atrasadas: agreements.reduce((t, a) => t + a.overdue_count, 0),
+    atrasado_cents: agreements.reduce((t, a) => t + a.overdue_cents, 0),
+    proximos_30d_cents: agreements.reduce((t, a) => t + a.installments
+      .filter(i => i.status === 'PENDENTE' && i.due_date >= today && i.due_date <= in30).reduce((x, i) => x + i.amount_cents, 0), 0),
+    desconto_concedido_cents: discount.d,
+    receita_cents: t.receita_acordos,
+    principal_pendente_cents: agreements.reduce((t2, a) => t2 + a.principal_pending_cents, 0),
+  };
+  // O principal ainda não recuperado nos acordos continua sendo "dinheiro na rua"
+  s.capital_alocado_cents += s.acordos.principal_pendente_cents;
   return c.json({ dashboard: s, today });
 });
 
 // ----- Contratos -----
 company.get('/contracts', async c => {
   const today = finance.todayIso();
-  const rows = (await c.get('db').prepare('SELECT * FROM contracts WHERE company_id = ? ORDER BY status, due_date').bind(c.get('company').id).all()).results;
-  return c.json({ contracts: rows.map(x => contractView(x, today)), today });
+  const db = c.get('db');
+  const cid = c.get('company').id;
+  const rows = (await db.prepare('SELECT * FROM contracts WHERE company_id = ? ORDER BY status, due_date').bind(cid).all()).results;
+  const agr = await agreementSummaries(db, cid, today);
+  return c.json({ contracts: rows.map(x => contractView(x, today, agr.get(x.id) || null)), today });
 });
 
 company.post('/contracts', async c => { // Gestor e Operador podem lançar empréstimos
@@ -518,11 +594,18 @@ company.post('/contracts', async c => { // Gestor e Operador podem lançar empr�
 company.get('/contracts/:id', async c => {
   const db = c.get('db');
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
-  const [occ, pay] = await db.batch([
+  const today = finance.todayIso();
+  const [occ, pay, hist] = await db.batch([
     db.prepare('SELECT id, author_name, author_role, text, created_at FROM occurrences WHERE contract_id = ? ORDER BY id DESC').bind(ct.id),
     db.prepare('SELECT date, type, amount_cents, channel, notes FROM ledger WHERE contract_id = ? ORDER BY id DESC').bind(ct.id),
+    db.prepare(`SELECT id, status, total_cents, debt_at_agreement_cents, created_at, closed_at FROM agreements
+      WHERE contract_id = ? ORDER BY id DESC`).bind(ct.id),
   ]);
-  return c.json({ contract: contractView(ct, finance.todayIso()), occurrences: occ.results, payments: pay.results });
+  const agr = await agreementSummaries(db, c.get('company').id, today, ct.id);
+  return c.json({
+    contract: contractView(ct, today, agr.get(ct.id) || null),
+    occurrences: occ.results, payments: pay.results, agreements_history: hist.results,
+  });
 });
 
 company.post('/contracts/:id/occurrences', async c => {
@@ -548,7 +631,7 @@ function rolloverStmts(db, ct, { amount_cents, channel, notes, date, user, today
   return {
     newDue,
     stmts: [
-      db.prepare("UPDATE contracts SET due_date = ?, rollover_count = rollover_count + 1 WHERE id = ? AND status = 'ATIVO' AND due_date = ?")
+      db.prepare("UPDATE contracts SET due_date = ?, rollover_count = rollover_count + 1 WHERE id = ? AND status = 'ATIVO' AND in_agreement = 0 AND due_date = ?")
         .bind(newDue, ct.id, ct.due_date),
       guard(db),
       db.prepare(`INSERT INTO ledger (company_id, contract_id, date, type, description, amount_cents, revenue_cents, channel, notes, user_id)
@@ -568,7 +651,7 @@ function settleStmts(db, ct, { amount_cents, channel, notes, date, user, today, 
   const principalPart = Math.min(paid, ct.principal_cents);
   const diff = paid - debt.totalToSettle;
   return [
-    db.prepare("UPDATE contracts SET status = 'QUITADO', settled_at = ? WHERE id = ? AND status = 'ATIVO' AND due_date = ?")
+    db.prepare("UPDATE contracts SET status = 'QUITADO', settled_at = ? WHERE id = ? AND status = 'ATIVO' AND in_agreement = 0 AND due_date = ?")
       .bind(date, ct.id, ct.due_date),
     guard(db),
     db.prepare(`INSERT INTO ledger (company_id, contract_id, date, type, description, amount_cents, principal_cents, revenue_cents, channel, notes, user_id)
@@ -581,6 +664,7 @@ function settleStmts(db, ct, { amount_cents, channel, notes, date, user, today, 
   ];
 }
 
+const IN_AGREEMENT_MSG = 'Este contrato está em acordo. Registre o recebimento pelas parcelas do acordo, na ficha do cliente.';
 const CONFLICT_MSG = 'Este contrato foi alterado por outra pessoa ou já está quitado. Atualize a página e confira.';
 
 company.post('/contracts/:id/rollover', managerOnly, async c => {
@@ -589,6 +673,7 @@ company.post('/contracts/:id/rollover', managerOnly, async c => {
   const today = finance.todayIso();
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
+  if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
   const { newDue, stmts } = rolloverStmts(db, ct, { channel, notes, date: today, user: c.get('user'), today, label: 'Rolagem (baixa manual)' });
   await atomic(db, stmts, CONFLICT_MSG);
   return c.json({ ok: true, new_due_date: newDue });
@@ -600,21 +685,199 @@ company.post('/contracts/:id/settle', managerOnly, async c => {
   const today = finance.todayIso();
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
+  if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
   await atomic(db, settleStmts(db, ct, { channel, notes, date: today, user: c.get('user'), today, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
+  return c.json({ ok: true });
+});
+
+// ----- Acordos -----
+const MAX_INSTALLMENTS = 120;
+
+function agreementInput(b) {
+  const total = moneyToCents(b.total, 'Valor total acordado');
+  if (!Array.isArray(b.installments) || !b.installments.length) throw new HttpError(400, 'Informe ao menos 1 parcela.');
+  if (b.installments.length > MAX_INSTALLMENTS) throw new HttpError(400, `Máximo de ${MAX_INSTALLMENTS} parcelas.`);
+  const installments = b.installments.map((it, i) => {
+    if (!finance.isValidIsoDate(it && it.due_date)) throw new HttpError(400, `Data inválida na parcela ${i + 1}.`);
+    return { due_date: it.due_date, amount_cents: moneyToCents(it.amount, `parcela ${i + 1}`) };
+  }).sort((a, b2) => a.due_date.localeCompare(b2.due_date));
+  const sum = installments.reduce((t, it) => t + it.amount_cents, 0);
+  if (sum !== total) {
+    throw new HttpError(400, `A soma das parcelas (${brl(sum)}) precisa ser igual ao valor acordado (${brl(total)}).`);
+  }
+  return { total, installments, notes: str(b.notes, { field: 'Condições do acordo', max: 2000 }) };
+}
+
+function installmentInserts(db, contractId, installments) {
+  return installments.map((it, i) => db.prepare(`INSERT INTO agreement_installments (agreement_id, number, due_date, amount_cents)
+    SELECT id, ?, ?, ? FROM agreements WHERE contract_id = ? AND status = 'ATIVO'`).bind(i + 1, it.due_date, it.amount_cents, contractId));
+}
+
+function scheduleText(installments) {
+  const n = installments.length;
+  const first = installments[0];
+  return `${n} parcela${n > 1 ? 's' : ''}, 1ª em ${brDate(first.due_date)}` + (n > 1 ? `, última em ${brDate(installments[n - 1].due_date)}` : '');
+}
+
+// Cria um acordo, ou renegocia (substitui) o acordo ativo do contrato
+company.post('/contracts/:id/agreement', managerOnly, async c => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const cid = c.get('company').id;
+  const today = finance.todayIso();
+  const { total, installments, notes } = agreementInput(await readJson(c));
+  const ct = await getContract(db, cid, c.req.param('id'));
+  if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
+
+  const stmts = [];
+  let debtAt;
+  let principalAt;
+  let replacesId = null;
+  let label;
+
+  if (!ct.in_agreement) {
+    const debt = finance.calculateDebt(ct, today);
+    debtAt = debt.totalToSettle;
+    principalAt = ct.principal_cents;
+    label = 'Acordo firmado';
+    stmts.push(
+      db.prepare("UPDATE contracts SET in_agreement = 1 WHERE id = ? AND status = 'ATIVO' AND in_agreement = 0 AND due_date = ?").bind(ct.id, ct.due_date),
+      guard(db),
+    );
+  } else {
+    // Renegociação: o acordo atual é substituído; a referência de dívida é o que faltava pagar dele
+    const old = (await agreementSummaries(db, cid, today, ct.id)).get(ct.id);
+    if (!old) throw new HttpError(409, CONFLICT_MSG);
+    debtAt = old.debt_at_agreement_cents - old.paid_cents;
+    principalAt = old.principal_pending_cents;
+    replacesId = old.id;
+    label = 'Acordo renegociado';
+    stmts.push(
+      db.prepare("UPDATE agreements SET status = 'CANCELADO', closed_at = ? WHERE id = ? AND status = 'ATIVO'").bind(today, old.id),
+      guard(db),
+    );
+  }
+
+  stmts.push(
+    db.prepare(`INSERT INTO agreements (company_id, contract_id, total_cents, debt_at_agreement_cents, principal_at_agreement_cents, notes, replaces_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(cid, ct.id, total, debtAt, principalAt, notes, replacesId, user.id),
+    ...installmentInserts(db, ct.id, installments),
+    occurrenceStmt(db, ct.id, null,
+      `${label} por ${user.name}: ${brl(total)} em ${scheduleText(installments)}. Dívida de referência: ${brl(debtAt)}` +
+      (debtAt > total ? ` (desconto de ${brl(debtAt - total)})` : '') + '.' + (notes ? ` Condições: ${notes}` : '')),
+  );
+  await atomic(db, stmts, CONFLICT_MSG);
+  return c.json({ ok: true }, 201);
+});
+
+async function getActiveAgreement(db, companyId, agreementId) {
+  const a = await db.prepare("SELECT * FROM agreements WHERE id = ? AND company_id = ?").bind(Number(agreementId), companyId).first();
+  if (!a) throw new HttpError(404, 'Acordo não encontrado.');
+  if (a.status !== 'ATIVO') throw new HttpError(400, 'Este acordo não está mais ativo.');
+  return a;
+}
+
+// Comandos para registrar o recebimento de uma parcela (e concluir o acordo se for a última)
+function payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date, user, label }) {
+  const diff = paid - inst.amount_cents;
+  return [
+    db.prepare(`UPDATE agreement_installments SET status = 'PAGO', paid_cents = ?, paid_at = ?, channel = ?, notes = ?, received_by = ?
+      WHERE id = ? AND status = 'PENDENTE' AND EXISTS (SELECT 1 FROM agreements WHERE id = ? AND status = 'ATIVO')`)
+      .bind(paid, date, channel, notes, user.id, inst.id, a.id),
+    guard(db),
+    // O valor recebido abate primeiro o principal ainda não recuperado; o restante é receita
+    db.prepare(`WITH x AS (
+        SELECT MAX(0, MIN(?1, a.principal_at_agreement_cents - COALESCE((SELECT SUM(principal_cents) FROM ledger WHERE agreement_id = a.id), 0))) AS p
+        FROM agreements a WHERE a.id = ?2)
+      INSERT INTO ledger (company_id, contract_id, agreement_id, date, type, description, amount_cents, principal_cents, revenue_cents, channel, notes, user_id)
+      SELECT ?3, ?4, ?2, ?5, 'PARCELA_ACORDO', ?6, ?1, x.p, ?1 - x.p, ?7, ?8, ?9 FROM x`)
+      .bind(paid, a.id, a.company_id, ct.id, date, `Parcela ${inst.number} do acordo ${ct.code} (${ct.client_name})`, channel, notes, user.id),
+    occurrenceStmt(db, ct.id, null,
+      `${label} por ${user.name}: parcela ${inst.number} (vencimento ${brDate(inst.due_date)}), recebido ${brl(paid)} (${channel}).` +
+      (diff !== 0 ? ` Atenção: valor da parcela era ${brl(inst.amount_cents)}.` : '') + (notes ? ` Obs.: ${notes}` : '')),
+    db.prepare(`UPDATE agreements SET status = 'CONCLUIDO', closed_at = ? WHERE id = ? AND status = 'ATIVO'
+      AND NOT EXISTS (SELECT 1 FROM agreement_installments WHERE agreement_id = ? AND status = 'PENDENTE')`).bind(date, a.id, a.id),
+    db.prepare(`UPDATE contracts SET status = 'QUITADO', in_agreement = 0, settled_at = ?
+      WHERE id = ? AND EXISTS (SELECT 1 FROM agreements WHERE id = ? AND status = 'CONCLUIDO')`).bind(date, ct.id, a.id),
+    db.prepare(`INSERT INTO occurrences (contract_id, author_name, author_role, text)
+      SELECT ?, 'Sistema', 'SISTEMA', 'Acordo concluído: todas as parcelas foram pagas. Contrato QUITADO.'
+      WHERE EXISTS (SELECT 1 FROM agreements WHERE id = ? AND status = 'CONCLUIDO')`).bind(ct.id, a.id),
+  ];
+}
+
+company.post('/agreements/:aid/installments/:iid/pay', managerOnly, async c => {
+  const db = c.get('db');
+  const cid = c.get('company').id;
+  const b = await readJson(c);
+  const a = await getActiveAgreement(db, cid, c.req.param('aid'));
+  const inst = await db.prepare('SELECT * FROM agreement_installments WHERE id = ? AND agreement_id = ?').bind(Number(c.req.param('iid')), a.id).first();
+  if (!inst) throw new HttpError(404, 'Parcela não encontrada.');
+  if (inst.status !== 'PENDENTE') throw new HttpError(400, 'Esta parcela já foi paga.');
+  const paid = b.amount === undefined || b.amount === '' ? inst.amount_cents : moneyToCents(b.amount, 'Valor recebido');
+  const { channel, notes } = paymentInput(b);
+  const ct = await getContract(db, cid, a.contract_id);
+  const today = finance.todayIso();
+  await atomic(db, payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date: today, user: c.get('user'), label: 'Parcela de acordo recebida' }),
+    'Esta parcela já foi registrada por outra pessoa. Atualize a página e confira.');
+  const after = await db.prepare('SELECT status FROM agreements WHERE id = ?').bind(a.id).first();
+  return c.json({ ok: true, concluded: after.status === 'CONCLUIDO' });
+});
+
+// Cancelar só é permitido se nenhuma parcela foi paga (serve para desfazer um acordo lançado por engano)
+company.post('/agreements/:aid/cancel', managerOnly, async c => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const a = await getActiveAgreement(db, c.get('company').id, c.req.param('aid'));
+  const paidCount = await db.prepare("SELECT COUNT(*) AS n FROM agreement_installments WHERE agreement_id = ? AND status = 'PAGO'").bind(a.id).first();
+  if (paidCount.n > 0) throw new HttpError(400, 'Este acordo já tem parcela paga e não pode ser cancelado. Use "Renegociar" para refazer as condições.');
+  if (a.replaces_id) throw new HttpError(400, 'Este acordo é uma renegociação e não pode ser cancelado. Use "Renegociar" para refazer as condições.');
+  await atomic(db, [
+    db.prepare(`UPDATE agreements SET status = 'CANCELADO', closed_at = ? WHERE id = ? AND status = 'ATIVO'
+      AND NOT EXISTS (SELECT 1 FROM agreement_installments WHERE agreement_id = ? AND status = 'PAGO')`).bind(finance.todayIso(), a.id, a.id),
+    guard(db),
+    db.prepare('UPDATE contracts SET in_agreement = 0 WHERE id = ?').bind(a.contract_id),
+    occurrenceStmt(db, a.contract_id, null, `Acordo cancelado por ${user.name}. O contrato voltou às condições originais.`),
+  ], 'Este acordo foi alterado por outra pessoa. Atualize a página e confira.');
   return c.json({ ok: true });
 });
 
 // ----- Relatório de inadimplência -----
 company.get('/report/overdue', async c => {
   const today = finance.todayIso();
-  const list = (await c.get('db').prepare("SELECT * FROM contracts WHERE company_id = ? AND status = 'ATIVO'").bind(c.get('company').id).all()).results
+  const db = c.get('db');
+  const cid = c.get('company').id;
+  const rows = (await db.prepare("SELECT * FROM contracts WHERE company_id = ? AND status = 'ATIVO'").bind(cid).all()).results;
+  const list = rows.filter(x => !x.in_agreement)
     .map(x => contractView(x, today))
     .filter(x => x.debt.overdueDays > 0)
     .sort((a, b) => b.debt.overdueDays - a.debt.overdueDays);
+
+  // Parcelas de acordo vencidas e não pagas
+  const agr = await agreementSummaries(db, cid, today);
+  const byId = new Map(rows.map(x => [x.id, x]));
+  const installments = [];
+  for (const a of agr.values()) {
+    const ct = byId.get(a.contract_id);
+    if (!ct) continue;
+    for (const i of a.installments) {
+      if (i.status === 'PENDENTE' && i.overdue_days > 0) {
+        installments.push({
+          contract_id: ct.id, code: ct.code, client_name: ct.client_name, cpf: ct.cpf, phone: ct.phone, address: ct.address,
+          agreement_id: a.id, installment_id: i.id, number: i.number, of: a.installments_count,
+          due_date: i.due_date, amount_cents: i.amount_cents, overdue_days: i.overdue_days,
+          agreement_remaining_cents: a.remaining_cents,
+        });
+      }
+    }
+  }
+  installments.sort((x, y) => y.overdue_days - x.overdue_days);
+
   return c.json({
     contracts: list,
+    agreement_installments: installments,
     total_diarias_cents: list.reduce((a, x) => a + x.debt.lateFee, 0),
     total_em_risco_cents: list.reduce((a, x) => a + x.debt.totalToSettle, 0),
+    total_parcelas_atrasadas_cents: installments.reduce((a, x) => a + x.amount_cents, 0),
     today,
   });
 });
@@ -628,7 +891,12 @@ company.get('/bank', managerOnly, async c => {
     db.prepare('SELECT * FROM contracts WHERE company_id = ?').bind(cid),
     db.prepare('SELECT * FROM bank_transactions WHERE company_id = ? ORDER BY date DESC, id DESC').bind(cid),
   ]);
-  const contracts = cr.results;
+  const agr = await agreementSummaries(db, cid, today);
+  // Para contratos em acordo, a sugestão compara com a próxima parcela pendente
+  const contracts = cr.results.map(x => {
+    const a = x.in_agreement ? agr.get(x.id) : null;
+    return a && a.next_installment ? { ...x, next_installment_cents: a.next_installment.amount_cents } : x;
+  });
   const txs = tr.results;
   const byId = new Map(contracts.map(x => [x.id, x]));
 
@@ -645,7 +913,11 @@ company.get('/bank', managerOnly, async c => {
     return {
       id: tx.id, fitid: tx.fitid, date: tx.date, description: tx.description, amount_cents: tx.amount_cents,
       status: tx.status, contract_id: s.contract_id, action: s.action,
-      contract: ct ? { id: ct.id, code: ct.code, client_name: ct.client_name, cpf: ct.cpf, debt: finance.calculateDebt(ct, today), status: ct.status } : null,
+      contract: ct ? {
+        id: ct.id, code: ct.code, client_name: ct.client_name, cpf: ct.cpf, debt: finance.calculateDebt(ct, today), status: ct.status,
+        in_agreement: !!ct.in_agreement,
+        next_installment: ct.in_agreement && agr.get(ct.id) ? agr.get(ct.id).next_installment : null,
+      } : null,
     };
   });
 
@@ -653,7 +925,7 @@ company.get('/bank', managerOnly, async c => {
   const saidas = txs.filter(t => t.amount_cents < 0).reduce((a, t) => a - t.amount_cents, 0);
   return c.json({
     transactions: out,
-    active_contracts: contracts.filter(x => x.status === 'ATIVO').map(x => ({ id: x.id, code: x.code, client_name: x.client_name })),
+    active_contracts: contracts.filter(x => x.status === 'ATIVO').map(x => ({ id: x.id, code: x.code, client_name: x.client_name, in_agreement: !!x.in_agreement })),
     totals: { entradas_cents: entradas, saidas_cents: saidas, liquido_cents: entradas - saidas, pendentes: txs.filter(t => t.status === 'PENDENTE').length },
   });
 });
@@ -678,7 +950,7 @@ company.post('/bank/import', managerOnly, async c => {
   return c.json({ imported, duplicates: parsed.length - imported });
 });
 
-const CREDIT_ACTIONS = ['ROLAR', 'QUITAR', 'OUTRA_ENTRADA'];
+const CREDIT_ACTIONS = ['ROLAR', 'QUITAR', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'];
 const DEBIT_ACTIONS = ['DESEMBOLSO', 'DESPESA'];
 
 company.post('/bank/:txid/validate', managerOnly, async c => {
@@ -698,8 +970,10 @@ company.post('/bank/:txid/validate', managerOnly, async c => {
 
   let ct = null;
   if (b.contract_id) ct = await getContract(db, cid, b.contract_id);
-  if ((action === 'ROLAR' || action === 'QUITAR') && !ct) throw new HttpError(400, 'Vincule um contrato antes de validar.');
-  if ((action === 'ROLAR' || action === 'QUITAR') && ct.status !== 'ATIVO') throw new HttpError(400, 'O contrato vinculado já está quitado.');
+  if ((action === 'ROLAR' || action === 'QUITAR' || action === 'PARCELA_ACORDO') && !ct) throw new HttpError(400, 'Vincule um contrato antes de validar.');
+  if ((action === 'ROLAR' || action === 'QUITAR' || action === 'PARCELA_ACORDO') && ct.status !== 'ATIVO') throw new HttpError(400, 'O contrato vinculado já está quitado.');
+  if ((action === 'ROLAR' || action === 'QUITAR') && ct.in_agreement) throw new HttpError(400, 'O contrato está em acordo: escolha "Parcela de acordo".');
+  if (action === 'PARCELA_ACORDO' && !ct.in_agreement) throw new HttpError(400, 'O contrato vinculado não tem acordo ativo.');
 
   // 1º: marca a transação como conciliada (só se ainda estiver pendente)
   const stmts = [
@@ -717,6 +991,14 @@ company.post('/bank/:txid/validate', managerOnly, async c => {
   } else if (action === 'QUITAR') {
     stmts.push(...settleStmts(db, ct, { ...opts, label: 'Quitação via conciliação bancária' }));
     message = `Contrato ${ct.code} quitado.`;
+  } else if (action === 'PARCELA_ACORDO') {
+    const a = await db.prepare("SELECT * FROM agreements WHERE contract_id = ? AND status = 'ATIVO'").bind(ct.id).first();
+    const inst = a && await db.prepare("SELECT * FROM agreement_installments WHERE agreement_id = ? AND status = 'PENDENTE' ORDER BY number LIMIT 1").bind(a.id).first();
+    if (!inst) throw new HttpError(400, 'O acordo deste contrato não tem parcela pendente.');
+    stmts.push(...payInstallmentStmts(db, a, ct, inst, {
+      paid: tx.amount_cents, channel: 'OFX', notes: `Extrato: ${tx.description}`, date: tx.date, user, label: 'Parcela de acordo recebida via conciliação bancária',
+    }));
+    message = `Parcela ${inst.number} do acordo registrada.`;
   } else if (action === 'OUTRA_ENTRADA') {
     stmts.push(db.prepare(`INSERT INTO ledger (company_id, contract_id, date, type, description, amount_cents, channel, user_id)
       VALUES (?, ?, ?, 'OUTRA_ENTRADA', ?, ?, 'OFX', ?)`).bind(cid, ct ? ct.id : null, tx.date, tx.description, tx.amount_cents, user.id));

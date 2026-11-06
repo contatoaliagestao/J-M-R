@@ -76,7 +76,8 @@ const TOLERANCE_CENTS = 5;
 
 /**
  * Sugere o contrato e a ação para uma transação do extrato.
- * Entradas: compara com juros do ciclo / juros + diárias (rolagem) e total de quitação.
+ * Entradas: compara com juros do ciclo / juros + diárias (rolagem), total de quitação
+ * e, para contratos em acordo, com o valor da próxima parcela.
  * Saídas: compara com o principal de contratos (desembolso); senão, despesa.
  */
 export function suggestMatch(tx, contracts, today) {
@@ -92,6 +93,13 @@ export function suggestMatch(tx, contracts, today) {
   const matches = [];
   for (const c of contracts) {
     if (c.status !== 'ATIVO') continue;
+    if (c.in_agreement) {
+      // Contrato em acordo: compara com a próxima parcela pendente
+      if (c.next_installment_cents && Math.abs(tx.amount_cents - c.next_installment_cents) <= TOLERANCE_CENTS) {
+        matches.push({ contract: c, action: 'PARCELA_ACORDO', score: nameScore(tx.description, c.client_name) });
+      }
+      continue;
+    }
     const debt = calculateDebt(c, today);
     let action = null;
     if (Math.abs(tx.amount_cents - debt.totalToSettle) <= TOLERANCE_CENTS) action = 'QUITAR';
@@ -108,7 +116,7 @@ export function suggestMatch(tx, contracts, today) {
       .filter(x => x.score >= 2)
       .sort((a, b) => b.score - a.score);
     if (byName.length === 1 || (byName.length > 1 && byName[0].score > byName[1].score)) {
-      return { contract_id: byName[0].c.id, action: null };
+      return { contract_id: byName[0].c.id, action: byName[0].c.in_agreement ? 'PARCELA_ACORDO' : null };
     }
     return { contract_id: null, action: null };
   }

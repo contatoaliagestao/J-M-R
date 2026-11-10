@@ -841,20 +841,47 @@ function openPayment(id) {
     <div class="flex justify-between text-slate-400"><span>Diárias (${c.late_fee_rate}%/dia):</span><span class="font-mono text-red-400 font-bold">${money(c.debt.lateFee)}</span></div>
     <div class="pt-2 border-t border-slate-800 flex justify-between text-sm font-bold"><span class="text-white">Total para quitação:</span><span class="font-mono text-emerald-400">${money(c.debt.totalToSettle)}</span></div>
     <div class="flex justify-between font-semibold text-slate-300"><span>Total para rolar (juros + diárias):</span><span class="font-mono text-teal-400">${money(c.debt.totalToRollover)}</span></div>`;
+  $('#payRolloverAmount').value = (c.debt.totalToRollover / 100).toFixed(2);
+  $('#paySettleAmount').value = (c.debt.totalToSettle / 100).toFixed(2);
+  updatePaymentDiscounts();
   openModal('paymentModal');
 }
+
+const paymentAmountCents = kind => Math.round((Number($(kind === 'rollover' ? '#payRolloverAmount' : '#paySettleAmount').value) || 0) * 100);
+
+// Mostra na hora o desconto (ou valor a mais) em relação ao valor cheio calculado
+function updatePaymentDiscounts() {
+  const c = state.paymentContract;
+  if (!c) return;
+  [['rollover', c.debt.totalToRollover, '#payRolloverDiscount'], ['settle', c.debt.totalToSettle, '#paySettleDiscount']].forEach(([kind, full, sel]) => {
+    const paid = paymentAmountCents(kind);
+    const el = $(sel);
+    if (!paid) { el.className = 'text-[11px] font-mono min-h-[16px] text-red-400'; el.textContent = 'Informe o valor recebido.'; return; }
+    const diff = full - paid;
+    if (diff > 0) { el.className = 'text-[11px] font-mono min-h-[16px] text-amber-300'; el.textContent = `Desconto: ${money(diff)} (cheio: ${money(full)})`; }
+    else if (diff < 0) { el.className = 'text-[11px] font-mono min-h-[16px] text-sky-300'; el.textContent = `${money(-diff)} a mais que o calculado`; }
+    else { el.className = 'text-[11px] font-mono min-h-[16px] text-slate-500'; el.textContent = 'Valor cheio, sem desconto'; }
+  });
+}
+$('#payRolloverAmount').addEventListener('input', updatePaymentDiscounts);
+$('#paySettleAmount').addEventListener('input', updatePaymentDiscounts);
 
 async function doPayment(kind, button) {
   const c = state.paymentContract;
   if (!c) return;
-  const value = kind === 'rollover' ? c.debt.totalToRollover : c.debt.totalToSettle;
-  const question = kind === 'rollover'
+  const full = kind === 'rollover' ? c.debt.totalToRollover : c.debt.totalToSettle;
+  const value = paymentAmountCents(kind);
+  if (value <= 0) return toast('Informe o valor recebido.', 'warning');
+  const diff = full - value;
+  const question = (kind === 'rollover'
     ? `Confirmar ROLAGEM do contrato ${c.code}, recebendo ${money(value)}?`
-    : `Confirmar QUITAÇÃO do contrato ${c.code}, recebendo ${money(value)}?`;
+    : `Confirmar QUITAÇÃO do contrato ${c.code}, recebendo ${money(value)}?`) +
+    (diff > 0 ? `\n\nDesconto concedido: ${money(diff)} (valor cheio: ${money(full)}).` : '') +
+    (diff < 0 ? `\n\nAtenção: ${money(-diff)} a mais que o valor calculado (${money(full)}).` : '');
   if (!confirm(question)) return;
   await withBusy(button, async () => {
     try {
-      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value };
+      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, amount: value / 100 };
       const r = await companyApi('POST', `/contracts/${c.id}/${kind === 'rollover' ? 'rollover' : 'settle'}`, body);
       closeModal('paymentModal');
       toast(kind === 'rollover' ? `Rolagem registrada. Novo vencimento: ${brDate(r.new_due_date)}.` : `Contrato ${c.code} quitado.`, 'success');

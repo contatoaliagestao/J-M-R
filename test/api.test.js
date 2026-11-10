@@ -473,3 +473,41 @@ test('editar contrato: só administrador; dados do cliente sempre; condições s
   assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { rate: 10 })).status, 400);
   assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { address: 'Rua Mais Nova' })).status, 200);
 });
+
+test('baixa com desconto: valor recebido editável na rolagem e na quitação', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const today = todayIso();
+  // R$ 1.000 a 20%, vencido há 3 dias: rolar = 200 + 3 × 120 = R$ 560; quitar = R$ 1.560
+  const ct = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Desconto Diarias', cpf: '9', phone: '11911112222', address: 'Rua D', principal: 1000, rate: 20, cycle_days: 30,
+    start_date: addDaysIso(today, -33),
+  })).data.contract;
+  assert.strictEqual(ct.debt.totalToRollover, 56000);
+  const before = (await admin('GET', `${base}/dashboard`)).data.dashboard.receita_realizada_cents;
+
+  // Negociou: paga só R$ 300 na rolagem (desconto de R$ 260 nas diárias)
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', amount: 0 })).status, 400);
+  const r = await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', amount: 300 });
+  assert.strictEqual(r.status, 200);
+  let d = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d.payments.find(p => p.type === 'ROLAGEM').amount_cents, 30000);
+  assert.ok(d.occurrences.some(o => /Desconto concedido: R\$\s?260,00/.test(o.text)));
+  assert.strictEqual((await admin('GET', `${base}/dashboard`)).data.dashboard.receita_realizada_cents - before, 30000);
+
+  // Quitação com desconto: R$ 1.100 (cheio seria R$ 1.200, sem atraso)
+  const s = await admin('POST', `${base}/contracts/${ct.id}/settle`, { channel: 'PIX_MANUAL', amount: 1100 });
+  assert.strictEqual(s.status, 200);
+  d = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d.contract.status, 'QUITADO');
+  assert.ok(d.occurrences.some(o => /Desconto concedido: R\$\s?100,00/.test(o.text)));
+  // R$ 1.000 volta como principal; R$ 100 é receita
+  assert.strictEqual((await admin('GET', `${base}/dashboard`)).data.dashboard.receita_realizada_cents - before, 40000);
+
+  // Sem informar valor: continua usando o valor cheio
+  const ct2 = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Valor Cheio', cpf: '8', phone: '11911113333', address: 'Rua E', principal: 500, rate: 10, cycle_days: 30,
+  })).data.contract;
+  await admin('POST', `${base}/contracts/${ct2.id}/rollover`, { channel: 'DINHEIRO' });
+  const d2 = (await admin('GET', `${base}/contracts/${ct2.id}`)).data;
+  assert.strictEqual(d2.payments.find(p => p.type === 'ROLAGEM').amount_cents, 5000);
+});

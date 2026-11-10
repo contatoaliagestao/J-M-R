@@ -599,13 +599,24 @@
         </div>
         <div><label class="field-label">Observações (opcional):</label><input id="paymentNotes" maxlength="300" class="field-input"></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-          <button data-action="do-rollover" class="bg-teal-600 hover:bg-teal-500 text-white font-bold p-3 rounded-xl flex flex-col items-center">
-            <span class="text-xs">Rolar Dívida (+1 ciclo)</span><span class="text-[10px] text-teal-200 mt-0.5">Paga juros + diárias</span>
-          </button>
-          <button data-action="do-settle" class="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold p-3 rounded-xl flex flex-col items-center">
-            <span class="text-xs">Quitar Contrato</span><span class="text-[10px] text-emerald-950 mt-0.5">Principal + juros + diárias</span>
-          </button>
+          <div class="space-y-2 bg-slate-950 border border-teal-500/30 rounded-xl p-3">
+            <label class="field-label mb-0">Valor recebido na rolagem (R$)</label>
+            <input id="payRolloverAmount" type="number" inputmode="decimal" step="0.01" min="0.01" class="field-input font-mono">
+            <div id="payRolloverDiscount" class="text-[11px] font-mono min-h-[16px]"></div>
+            <button data-action="do-rollover" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold p-3 rounded-xl flex flex-col items-center">
+              <span class="text-xs">Rolar Dívida (+1 ciclo)</span><span class="text-[10px] text-teal-200 mt-0.5">Paga juros + diárias</span>
+            </button>
+          </div>
+          <div class="space-y-2 bg-slate-950 border border-emerald-500/30 rounded-xl p-3">
+            <label class="field-label mb-0">Valor recebido na quitação (R$)</label>
+            <input id="paySettleAmount" type="number" inputmode="decimal" step="0.01" min="0.01" class="field-input font-mono">
+            <div id="paySettleDiscount" class="text-[11px] font-mono min-h-[16px]"></div>
+            <button data-action="do-settle" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold p-3 rounded-xl flex flex-col items-center">
+              <span class="text-xs">Quitar Contrato</span><span class="text-[10px] text-emerald-950 mt-0.5">Principal + juros + diárias</span>
+            </button>
+          </div>
         </div>
+        <p class="text-[10px] text-slate-400">Negociou desconto (por exemplo, nas diárias)? Altere o valor recebido antes de confirmar. O desconto fica registrado no histórico do cliente.</p>
         <button data-action="open-agreement" class="w-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold p-3 rounded-xl flex flex-col items-center">
           <span class="text-xs"><i class="fa-solid fa-handshake mr-1"></i>Fazer Acordo</span>
           <span class="text-[10px] text-amber-200/70 mt-0.5">Cliente não consegue pagar: negociar valor e parcelas</span>

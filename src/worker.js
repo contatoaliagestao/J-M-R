@@ -728,7 +728,16 @@ company.post('/contracts/:id/occurrences', async c => {
 function paymentInput(b) {
   const channel = PAYMENT_CHANNELS.includes(b.channel) ? b.channel : null;
   if (!channel) throw new HttpError(400, 'Escolha o método de baixa.');
-  return { channel, notes: str(b.notes, { field: 'Observações', max: 300 }) };
+  // Valor recebido é opcional: se não vier, usa o valor cheio calculado pelo sistema
+  const amount_cents = b.amount === undefined || b.amount === null || b.amount === '' ? undefined : moneyToCents(b.amount, 'Valor recebido');
+  return { channel, notes: str(b.notes, { field: 'Observações', max: 300 }), amount_cents };
+}
+
+// Texto do histórico quando o valor recebido difere do calculado
+function differenceText(paid, expected) {
+  if (paid < expected) return ` Desconto concedido: ${brl(expected - paid)} (valor cheio era ${brl(expected)}).`;
+  if (paid > expected) return ` Recebido ${brl(paid - expected)} a mais que o valor calculado (${brl(expected)}).`;
+  return '';
 }
 
 // Comandos de uma rolagem. O 1º só altera o contrato se ele continua como foi lido (ativo e com o mesmo vencimento).
@@ -748,7 +757,7 @@ function rolloverStmts(db, ct, { amount_cents, channel, notes, date, user, today
         .bind(ct.company_id, ct.id, date, `Rolagem ${ct.code} (${ct.client_name})`, paid, paid, channel, notes, user.id),
       occurrenceStmt(db, ct.id, null,
         `${label} por ${user.name}: recebido ${brl(paid)} (${channel}). Novo vencimento: ${brDate(newDue)}.` +
-        (diff !== 0 ? ` Atenção: valor esperado era ${brl(debt.totalToRollover)}.` : '') +
+        differenceText(paid, debt.totalToRollover) +
         (notes ? ` Obs.: ${notes}` : '')),
     ],
   };
@@ -768,7 +777,7 @@ function settleStmts(db, ct, { amount_cents, channel, notes, date, user, today, 
       .bind(ct.company_id, ct.id, date, `Quitação ${ct.code} (${ct.client_name})`, paid, principalPart, paid - principalPart, channel, notes, user.id),
     occurrenceStmt(db, ct.id, null,
       `${label} por ${user.name}: recebido ${brl(paid)} (${channel}). Contrato QUITADO.` +
-      (diff !== 0 ? ` Atenção: valor esperado era ${brl(debt.totalToSettle)}.` : '') +
+      differenceText(paid, debt.totalToSettle) +
       (notes ? ` Obs.: ${notes}` : '')),
   ];
 }
@@ -778,24 +787,24 @@ const CONFLICT_MSG = 'Este contrato foi alterado por outra pessoa ou já está q
 
 company.post('/contracts/:id/rollover', managerOnly, async c => {
   const db = c.get('db');
-  const { channel, notes } = paymentInput(await readJson(c));
+  const { channel, notes, amount_cents } = paymentInput(await readJson(c));
   const today = finance.todayIso();
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  const { newDue, stmts } = rolloverStmts(db, ct, { channel, notes, date: today, user: c.get('user'), today, label: 'Rolagem (baixa manual)' });
+  const { newDue, stmts } = rolloverStmts(db, ct, { amount_cents, channel, notes, date: today, user: c.get('user'), today, label: 'Rolagem (baixa manual)' });
   await atomic(db, stmts, CONFLICT_MSG);
   return c.json({ ok: true, new_due_date: newDue });
 });
 
 company.post('/contracts/:id/settle', managerOnly, async c => {
   const db = c.get('db');
-  const { channel, notes } = paymentInput(await readJson(c));
+  const { channel, notes, amount_cents } = paymentInput(await readJson(c));
   const today = finance.todayIso();
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  await atomic(db, settleStmts(db, ct, { channel, notes, date: today, user: c.get('user'), today, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
+  await atomic(db, settleStmts(db, ct, { amount_cents, channel, notes, date: today, user: c.get('user'), today, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
   return c.json({ ok: true });
 });
 

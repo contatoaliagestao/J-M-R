@@ -709,14 +709,107 @@ function updateLoanPreview() {
 }
 $('#loanForm').addEventListener('input', updateLoanPreview);
 
-function openLoanModal() {
+function openLoanModal(prefillClient = null) {
   const form = $('#loanForm');
   form.reset();
   form.start_date.value = state.today;
+  hideClientSuggestions();
+  $('#clientSelected').classList.add('hidden');
   updateLoanPreview();
   openModal('loanModal');
-  setTimeout(() => form.client_name.focus(), 50);
+  if (prefillClient) {
+    fillClient(prefillClient);
+  } else {
+    setTimeout(() => form.client_name.focus(), 50);
+  }
 }
+
+// ----- Clientes já cadastrados (puxar dados no novo empréstimo) -----
+const digitsOnly = v => String(v || '').replace(/\D/g, '');
+const normalizeText = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+// Junta os contratos da empresa por cliente (CPF; sem CPF válido, pelo nome) usando os dados do contrato mais recente
+function clientIndex() {
+  const map = new Map();
+  [...state.contracts].sort((a, b) => b.id - a.id).forEach(c => {
+    const cpf = digitsOnly(c.cpf);
+    const key = cpf.length >= 11 ? 'cpf:' + cpf : 'nome:' + normalizeText(c.client_name);
+    let cl = map.get(key);
+    if (!cl) {
+      cl = { key, client_name: c.client_name, cpf: c.cpf, phone: c.phone, address: c.address, social_media: c.social_media,
+        ativos: 0, atrasados: 0, acordos: 0, quitados: 0 };
+      map.set(key, cl);
+    }
+    if (c.situation === 'QUITADO') cl.quitados++;
+    else {
+      cl.ativos++;
+      if (c.situation === 'ATRASADO' || (c.situation === 'ACORDO' && c.agreement && c.agreement.overdue_count > 0)) cl.atrasados++;
+      if (c.situation === 'ACORDO') cl.acordos++;
+    }
+  });
+  return [...map.values()];
+}
+
+function clientStatusLine(cl) {
+  const parts = [];
+  if (cl.atrasados) parts.push(`<span class="text-red-400 font-bold">${cl.atrasados} em atraso</span>`);
+  if (cl.acordos) parts.push(`<span class="text-amber-300">${cl.acordos} em acordo</span>`);
+  if (cl.ativos - cl.atrasados > 0) parts.push(`<span class="text-emerald-400">${cl.ativos} ativo${cl.ativos > 1 ? 's' : ''}</span>`);
+  if (cl.quitados) parts.push(`<span class="text-slate-400">${cl.quitados} quitado${cl.quitados > 1 ? 's' : ''}</span>`);
+  return parts.join(' • ');
+}
+
+function hideClientSuggestions() {
+  $('#clientSuggestions').classList.add('hidden');
+  $('#clientSuggestions').innerHTML = '';
+}
+
+function showClientSuggestions(query) {
+  const q = normalizeText(query);
+  const qd = digitsOnly(query);
+  if (q.length < 2 && qd.length < 3) return hideClientSuggestions();
+  const list = clientIndex().filter(cl =>
+    (q.length >= 2 && normalizeText(cl.client_name).includes(q)) || (qd.length >= 3 && digitsOnly(cl.cpf).includes(qd))).slice(0, 5);
+  if (!list.length) return hideClientSuggestions();
+  state.clientSuggestions = list;
+  const box = $('#clientSuggestions');
+  box.innerHTML = list.map((cl, i) => `
+    <button type="button" data-action="pick-client" data-id="${i}" class="w-full text-left bg-slate-950 hover:bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="font-bold text-white text-sm truncate"><i class="fa-solid fa-user-check theme-accent-text mr-1.5"></i>${esc(cl.client_name)}</span>
+        <span class="text-[10px] theme-accent-text font-bold whitespace-nowrap">USAR DADOS</span>
+      </div>
+      <div class="text-[11px] text-slate-400 font-mono mt-0.5">CPF ${esc(cl.cpf)} • ${esc(formatPhone(cl.phone))}</div>
+      <div class="text-[11px] mt-0.5">${clientStatusLine(cl)}</div>
+    </button>`).join('');
+  box.classList.remove('hidden');
+}
+
+function fillClient(cl) {
+  const f = $('#loanForm');
+  f.client_name.value = cl.client_name;
+  f.cpf.value = cl.cpf;
+  f.phone.value = formatPhone(cl.phone);
+  f.address.value = cl.address;
+  f.social_media.value = cl.social_media || '';
+  hideClientSuggestions();
+  const full = clientIndex().find(x => x.key === cl.key) || cl;
+  const warn = full.atrasados > 0;
+  const box = $('#clientSelected');
+  box.innerHTML = `<div class="rounded-xl px-3 py-2 text-xs border ${warn ? 'bg-red-500/10 border-red-500/40 text-red-200' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'}">
+    <i class="fa-solid ${warn ? 'fa-triangle-exclamation' : 'fa-circle-check'} mr-1"></i>
+    Dados de cliente já cadastrado preenchidos. ${clientStatusLine(full) ? 'Situação: ' + clientStatusLine(full) + '.' : ''}
+    ${warn ? '<br><b>Atenção:</b> este cliente tem contrato em atraso.' : ''}
+    <span class="block text-[10px] text-slate-400 mt-0.5">Confira o telefone e o endereço, e altere se mudaram.</span></div>`;
+  box.classList.remove('hidden');
+  setTimeout(() => f.principal.focus(), 50);
+}
+
+$('#loanForm').client_name.addEventListener('input', e => { $('#clientSelected').classList.add('hidden'); showClientSuggestions(e.target.value); });
+$('#loanForm').cpf.addEventListener('input', e => {
+  const d = digitsOnly(e.target.value);
+  if (d.length >= 3) showClientSuggestions(e.target.value);
+});
 
 $('#loanForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -950,7 +1043,8 @@ async function openDossier(id) {
         <button data-action="copy-phone" data-phone="${esc(c.phone)}" class="text-slate-400 hover:text-white text-xs ml-1" title="Copiar"><i class="fa-regular fa-copy"></i></button>
         <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" class="text-emerald-400 hover:text-emerald-300 ml-1" title="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a></div>
       <div><span class="text-slate-500 text-[10px] uppercase font-bold block">Endereço</span><span class="text-slate-300"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${esc(c.address)}</span></div>
-      <div><span class="text-slate-500 text-[10px] uppercase font-bold block">Rede social</span><span class="text-blue-400">${esc(c.social_media || 'Não informada')}</span></div>`;
+      <div><span class="text-slate-500 text-[10px] uppercase font-bold block">Rede social</span><span class="text-blue-400">${esc(c.social_media || 'Não informada')}</span></div>
+      <div class="sm:col-span-2 pt-1"><button data-action="loan-for-client" class="w-full sm:w-auto theme-accent-bg font-bold px-4 py-2.5 rounded-xl text-xs"><i class="fa-solid fa-plus mr-1"></i>Novo empréstimo para este cliente</button></div>`;
     $('#dossierDebt').innerHTML = `
       <div><span class="text-slate-400 text-[11px]">Principal / taxa</span><div class="font-mono font-bold text-white">${money(c.principal_cents)} (${c.rate}% / ${c.cycle_days}d)</div></div>
       <div><span class="text-slate-400 text-[11px]">Situação</span><div class="mt-0.5">${statusBadge(c)}</div></div>
@@ -1434,6 +1528,15 @@ document.addEventListener('click', e => {
     case 'logout': return logout();
     case 'open-mobile-menu': return openMobileMenu();
     case 'new-loan': return openLoanModal();
+    case 'pick-client': return state.clientSuggestions && fillClient(state.clientSuggestions[id]);
+    case 'loan-for-client': {
+      const c = state.dossierContract;
+      if (!c) return;
+      closeModal('dossierModal');
+      const cpf = digitsOnly(c.cpf);
+      const key = cpf.length >= 11 ? 'cpf:' + cpf : 'nome:' + normalizeText(c.client_name);
+      return openLoanModal(clientIndex().find(x => x.key === key) || { ...c, key });
+    }
     case 'dossier': return openDossier(id);
     case 'payment': return openPayment(id);
     case 'do-rollover': return doPayment('rollover', el);

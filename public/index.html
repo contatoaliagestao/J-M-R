@@ -492,7 +492,12 @@
         <button data-close class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
       </div>
       <form id="loanForm" class="space-y-4 text-xs">
-        <div><label class="field-label">Nome completo do cliente *</label><input name="client_name" required maxlength="120" class="field-input"></div>
+        <div>
+          <label class="field-label">Nome completo do cliente * <span class="text-slate-500 font-normal">— digite o nome ou o CPF para puxar um cliente já cadastrado</span></label>
+          <input name="client_name" required maxlength="120" autocomplete="off" class="field-input">
+          <div id="clientSuggestions" class="hidden mt-2 space-y-1.5"></div>
+          <div id="clientSelected" class="hidden mt-2"></div>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div><label class="field-label">CPF *</label><input name="cpf" required maxlength="20" inputmode="numeric" class="field-input font-mono" placeholder="000.000.000-00"></div>
           <div><label class="field-label">WhatsApp (cobrança) *</label><input name="phone" type="tel" required maxlength="30" class="field-input font-mono" placeholder="(11) 98765-4321"></div>

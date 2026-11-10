@@ -676,10 +676,11 @@ company.put('/contracts/:id', requireAdmin, async c => {
   ];
   // Mantém o lançamento de concessão coerente com o novo principal / data
   if (financial.principal_cents !== undefined || financial.start_date !== undefined || next.client_name !== undefined) {
+    const amortized = (await db.prepare("SELECT COALESCE(SUM(principal_cents), 0) AS t FROM ledger WHERE contract_id = ? AND type = 'AMORTIZACAO'").bind(ct.id).first()).t;
+    const granted = (financial.principal_cents ?? ct.principal_cents) + amortized;
     stmts.push(db.prepare(`UPDATE ledger SET amount_cents = -?, principal_cents = ?, date = ?, description = ?
       WHERE contract_id = ? AND type = 'CONCESSAO'`)
-      .bind(financial.principal_cents ?? ct.principal_cents, financial.principal_cents ?? ct.principal_cents,
-        financial.start_date ?? ct.start_date, `Concessão ${ct.code} (${next.client_name ?? ct.client_name})`, ct.id));
+      .bind(granted, granted, financial.start_date ?? ct.start_date, `Concessão ${ct.code} (${next.client_name ?? ct.client_name})`, ct.id));
   }
   stmts.push(occurrenceStmt(db, ct.id, null, `Contrato editado por ${user.name}. ${summary}.`));
   await atomic(db, stmts, 'Este contrato foi alterado por outra pessoa enquanto você editava. Atualize a página e tente de novo.');
@@ -688,7 +689,7 @@ company.put('/contracts/:id', requireAdmin, async c => {
 
 // Excluir contrato (Gestor/Administrador). Só é permitido se o contrato não tem nenhum recebimento,
 // para não apagar receita nem caixa já registrados. Fica um registro da exclusão.
-const RECEIPT_TYPES_SQL = "('ROLAGEM','QUITACAO','PARCELA_ACORDO','OUTRA_ENTRADA')";
+const RECEIPT_TYPES_SQL = "('ROLAGEM','QUITACAO','PARCELA_ACORDO','OUTRA_ENTRADA','AMORTIZACAO')";
 
 company.delete('/contracts/:id', managerOnly, async c => {
   const db = c.get('db');
@@ -813,6 +814,45 @@ company.post('/contracts/:id/settle', managerOnly, async c => {
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
   await atomic(db, settleStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), today: paid_on, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
   return c.json({ ok: true });
+});
+
+// ----- Quebrar juros (amortização) -----
+// O cliente antecipa um valor que abate o principal; os juros do ciclo passam a ser calculados sobre o novo principal.
+// O vencimento não muda.
+function amortizeStmts(db, ct, { amount_cents, channel, notes, date, user, label }) {
+  const newPrincipal = ct.principal_cents - amount_cents;
+  const oldInterest = Math.round(ct.principal_cents * ct.rate / 100);
+  const newInterest = Math.round(newPrincipal * ct.rate / 100);
+  return [
+    db.prepare(`UPDATE contracts SET principal_cents = ? WHERE id = ? AND status = 'ATIVO' AND in_agreement = 0 AND principal_cents = ?`)
+      .bind(newPrincipal, ct.id, ct.principal_cents),
+    guard(db),
+    db.prepare(`INSERT INTO ledger (company_id, contract_id, date, type, description, amount_cents, principal_cents, revenue_cents, channel, notes, user_id)
+      VALUES (?, ?, ?, 'AMORTIZACAO', ?, ?, ?, 0, ?, ?, ?)`)
+      .bind(ct.company_id, ct.id, date, `Quebra de juros ${ct.code} (${ct.client_name})`, amount_cents, amount_cents, channel, notes, user.id),
+    occurrenceStmt(db, ct.id, null,
+      `${label} por ${user.name}: recebido ${brl(amount_cents)} (${channel})${date !== finance.todayIso() ? ` em ${brDate(date)}` : ''} para abater o principal. ` +
+      `Principal: ${brl(ct.principal_cents)} → ${brl(newPrincipal)}. Juros do ciclo: ${brl(oldInterest)} → ${brl(newInterest)}.` +
+      (notes ? ` Obs.: ${notes}` : '')),
+  ];
+}
+
+function checkAmortization(ct, amount_cents) {
+  if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
+  if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
+  if (!amount_cents) throw new HttpError(400, 'Informe o valor recebido.');
+  if (amount_cents >= ct.principal_cents) {
+    throw new HttpError(400, `O valor (${brl(amount_cents)}) cobre todo o principal (${brl(ct.principal_cents)}). Use "Quitar contrato".`);
+  }
+}
+
+company.post('/contracts/:id/amortize', managerOnly, async c => {
+  const db = c.get('db');
+  const { channel, notes, amount_cents, paid_on } = paymentInput(await readJson(c));
+  const ct = await getContract(db, c.get('company').id, c.req.param('id'));
+  checkAmortization(ct, amount_cents);
+  await atomic(db, amortizeStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), label: 'Quebra de juros' }), CONFLICT_MSG);
+  return c.json({ ok: true, new_principal_cents: ct.principal_cents - amount_cents });
 });
 
 // ----- Acordos -----
@@ -1074,7 +1114,7 @@ company.post('/bank/import', managerOnly, async c => {
   return c.json({ imported, duplicates: parsed.length - imported });
 });
 
-const CREDIT_ACTIONS = ['ROLAR', 'QUITAR', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'];
+const CREDIT_ACTIONS = ['ROLAR', 'QUITAR', 'AMORTIZACAO', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'];
 const DEBIT_ACTIONS = ['DESEMBOLSO', 'DESPESA'];
 
 company.post('/bank/:txid/validate', managerOnly, async c => {
@@ -1115,6 +1155,13 @@ company.post('/bank/:txid/validate', managerOnly, async c => {
   } else if (action === 'QUITAR') {
     stmts.push(...settleStmts(db, ct, { ...opts, label: 'Quitação via conciliação bancária' }));
     message = `Contrato ${ct.code} quitado.`;
+  } else if (action === 'AMORTIZACAO') {
+    if (!ct) throw new HttpError(400, 'Vincule um contrato antes de validar.');
+    checkAmortization(ct, tx.amount_cents);
+    stmts.push(...amortizeStmts(db, ct, {
+      amount_cents: tx.amount_cents, channel: 'OFX', notes: `Extrato: ${tx.description}`, date: tx.date, user, label: 'Quebra de juros via conciliação bancária',
+    }));
+    message = `Quebra de juros registrada. Novo principal: ${brl(ct.principal_cents - tx.amount_cents)}.`;
   } else if (action === 'PARCELA_ACORDO') {
     const a = await db.prepare("SELECT * FROM agreements WHERE contract_id = ? AND status = 'ATIVO'").bind(ct.id).first();
     const inst = a && await db.prepare("SELECT * FROM agreement_installments WHERE agreement_id = ? AND status = 'PENDENTE' ORDER BY number LIMIT 1").bind(a.id).first();

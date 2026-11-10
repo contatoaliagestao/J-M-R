@@ -569,3 +569,54 @@ test('data do recebimento livre: aceita data futura e anterior à concessão', a
   const d = (await admin('GET', `${base}/contracts/${b.id}`)).data;
   assert.strictEqual(d.contract.settled_at, addDaysIso(today, -30));
 });
+
+test('quebrar juros: abate o principal, reduz os juros e mantém o vencimento', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const today = todayIso();
+  const ct = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Quebra Juros', cpf: '3', phone: '11944445555', address: 'Rua J', principal: 600, rate: 45, cycle_days: 30, start_date: addDaysIso(today, -10),
+  })).data.contract;
+  assert.strictEqual(ct.debt.cycleInterest, 27000);
+  const dashBefore = (await admin('GET', `${base}/dashboard`)).data.dashboard;
+
+  // Operador não pode; valor que cobre todo o principal é recusado
+  const op = client();
+  await op('POST', '/api/login', { login: 'op.dois', password: 'senha-op-dois' });
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/amortize`, { channel: 'DINHEIRO', amount: 600 })).status, 400);
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/amortize`, { channel: 'DINHEIRO' })).status, 400);
+
+  const r = await admin('POST', `${base}/contracts/${ct.id}/amortize`, { channel: 'PIX_MANUAL', amount: 200 });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.data.new_principal_cents, 40000);
+  const d = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d.contract.principal_cents, 40000);
+  assert.strictEqual(d.contract.debt.cycleInterest, 18000); // 45% de R$ 400
+  assert.strictEqual(d.contract.due_date, ct.due_date);
+  assert.ok(d.occurrences.some(o => /Juros do ciclo: R\$\s?270,00 → R\$\s?180,00/.test(o.text)));
+
+  // Dashboard: dinheiro na rua cai R$ 200; não é receita
+  const dashAfter = (await admin('GET', `${base}/dashboard`)).data.dashboard;
+  assert.strictEqual(dashBefore.capital_alocado_cents - dashAfter.capital_alocado_cents, 20000);
+  assert.strictEqual(dashAfter.receita_realizada_cents, dashBefore.receita_realizada_cents);
+
+  // Depois, a rolagem cobra os juros menores; contrato com amortização não pode ser excluído
+  const roll = await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO' });
+  assert.strictEqual(roll.status, 200);
+  const d2 = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d2.payments.find(p => p.type === 'ROLAGEM').amount_cents, 18000);
+  assert.strictEqual((await admin('DELETE', `${base}/contracts/${ct.id}`, { reason: 'x' })).status, 400);
+
+  // Editar o principal mantém a concessão = principal + amortizado
+  await admin('PUT', `${base}/contracts/${ct.id}`, { principal: 450 });
+  const d3 = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d3.payments.find(p => p.type === 'CONCESSAO').amount_cents, -65000);
+
+  // Pela conciliação bancária
+  const ct2 = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Quebra Via Pix', cpf: '2', phone: '11944446666', address: 'Rua K', principal: 1000, rate: 20, cycle_days: 30,
+  })).data.contract;
+  await admin('POST', `${base}/bank/import`, { content: `<OFX><STMTTRN><DTPOSTED>${today.replace(/-/g, '')}<TRNAMT>300.00<FITID>AMZ1<MEMO>PIX QUEBRA VIA PIX</STMTTRN></OFX>` });
+  const tx = (await admin('GET', `${base}/bank`)).data.transactions.find(t => t.fitid === 'AMZ1');
+  assert.strictEqual((await admin('POST', `${base}/bank/${tx.id}/validate`, { action: 'AMORTIZACAO', contract_id: ct2.id })).status, 200);
+  assert.strictEqual((await admin('GET', `${base}/contracts/${ct2.id}`)).data.contract.principal_cents, 70000);
+});

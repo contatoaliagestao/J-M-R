@@ -20,6 +20,7 @@ const PAGE_HEADERS = {
 const ACTION_LABELS = {
   ROLAR: 'Rolagem (juros + diárias)',
   QUITAR: 'Quitação do contrato',
+  AMORTIZACAO: 'Quebrar juros (abate principal)',
   PARCELA_ACORDO: 'Parcela de acordo',
   OUTRA_ENTRADA: 'Outra entrada (sem contrato)',
   DESEMBOLSO: 'Desembolso de empréstimo',
@@ -834,6 +835,7 @@ function openPayment(id) {
   state.paymentContract = c;
   $('#paymentSub').textContent = `${c.client_name} (${c.code})`;
   $('#paymentNotes').value = '';
+  $('#payAmortizeAmount').value = '';
   $('#payDate').value = state.today;
   setPaymentDate(state.today);
   openModal('paymentModal');
@@ -863,7 +865,72 @@ function setPaymentDate(iso) {
     <div class="flex justify-between font-semibold text-slate-300"><span>Total para rolar (juros + diárias):</span><span class="font-mono text-teal-400">${money(d.totalToRollover)}</span></div>`;
   $('#payRolloverAmount').value = (d.totalToRollover / 100).toFixed(2);
   $('#paySettleAmount').value = (d.totalToSettle / 100).toFixed(2);
+  $('#lateDiscountBox').classList.toggle('hidden', d.lateFee <= 0);
+  applyLateDiscount(0);
   updatePaymentDiscounts();
+  updateAmortizePreview();
+}
+
+// ----- Desconto nas diárias -----
+function applyLateDiscount(cents, { fromInput = false } = {}) {
+  const d = state.paymentDebt;
+  if (!d) return;
+  const disc = Math.max(0, Math.min(Math.round(cents), d.lateFee));
+  state.lateDiscount = disc;
+  $('#payRolloverAmount').value = ((d.totalToRollover - disc) / 100).toFixed(2);
+  $('#paySettleAmount').value = ((d.totalToSettle - disc) / 100).toFixed(2);
+  if (!fromInput) $('#lateDiscountValue').value = disc ? (disc / 100).toFixed(2) : '';
+  const pct = d.lateFee ? Math.round(disc / d.lateFee * 100) : 0;
+  $$('#lateDiscountBox .ld-btn').forEach(b => b.classList.toggle('active', !fromInput && Number(b.dataset.pct) === pct));
+  $('#lateDiscountInfo').textContent = disc ? `Desconto: ${money(disc)} de ${money(d.lateFee)}` : `Diárias: ${money(d.lateFee)}`;
+  updatePaymentDiscounts();
+}
+$('#lateDiscountValue').addEventListener('input', e => {
+  const v = Math.round((Number(e.target.value) || 0) * 100);
+  if (state.paymentDebt && v > state.paymentDebt.lateFee) toast(`O desconto não pode passar do valor das diárias (${money(state.paymentDebt.lateFee)}).`, 'warning');
+  applyLateDiscount(v, { fromInput: true });
+});
+
+// ----- Quebrar juros: prévia de como ficam principal e juros -----
+function updateAmortizePreview() {
+  const c = state.paymentContract;
+  if (!c) return;
+  const v = Math.round((Number($('#payAmortizeAmount').value) || 0) * 100);
+  const el = $('#payAmortizePreview');
+  if (!v) { el.className = 'text-[11px] font-mono text-slate-400 min-h-[16px]'; el.textContent = 'O valor é abatido do principal; os juros diminuem. O vencimento não muda.'; return; }
+  if (v >= c.principal_cents) { el.className = 'text-[11px] font-mono text-red-400 min-h-[16px]'; el.textContent = `Cobre todo o principal (${money(c.principal_cents)}): use "Quitar Contrato".`; return; }
+  const np = c.principal_cents - v;
+  const oi = Math.round(c.principal_cents * c.rate / 100);
+  const ni = Math.round(np * c.rate / 100);
+  el.className = 'text-[11px] font-mono text-sky-300 min-h-[16px]';
+  el.textContent = `Principal: ${money(c.principal_cents)} → ${money(np)} • Juros do ciclo: ${money(oi)} → ${money(ni)}`;
+}
+$('#payAmortizeAmount').addEventListener('input', updateAmortizePreview);
+
+async function doAmortize(button) {
+  const c = state.paymentContract;
+  if (!c) return;
+  const v = Math.round((Number($('#payAmortizeAmount').value) || 0) * 100);
+  if (!v) return toast('Informe o valor que o cliente antecipou.', 'warning');
+  if (v >= c.principal_cents) return toast('Esse valor cobre todo o principal: use "Quitar Contrato".', 'warning');
+  const paidOn = $('#payDate').value || state.today;
+  const np = c.principal_cents - v;
+  const msg = `Confirmar QUEBRA DE JUROS do contrato ${c.code}, recebendo ${money(v)}${paidOn !== state.today ? ` em ${brDate(paidOn)}` : ''}?\n\n` +
+    `Principal: ${money(c.principal_cents)} → ${money(np)}\nJuros do ciclo: ${money(Math.round(c.principal_cents * c.rate / 100))} → ${money(Math.round(np * c.rate / 100))}\n` +
+    `O vencimento (${brDate(c.due_date)}) não muda.` +
+    (c.debt.overdueDays > 0 ? `\n\nAtenção: o contrato está em atraso; as diárias passam a ser calculadas sobre o novo principal.` : '') +
+    paidOnWarning(paidOn, c.start_date);
+  if (!confirm(msg)) return;
+  await withBusy(button, async () => {
+    try {
+      await companyApi('POST', `/contracts/${c.id}/amortize`, {
+        amount: v / 100, channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, paid_on: paidOn,
+      });
+      closeModal('paymentModal');
+      toast(`Quebra de juros registrada. Novo principal: ${money(np)}.`, 'success');
+      refresh();
+    } catch (err) { handleError(err); }
+  });
 }
 
 $('#payDate').addEventListener('change', e => {
@@ -917,7 +984,7 @@ async function doPayment(kind, button) {
   if (!confirm(question + paidOnWarning(paidOn, c.start_date))) return;
   await withBusy(button, async () => {
     try {
-      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, amount: value / 100, paid_on: paidOn };
+      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: [state.lateDiscount && value === full - state.lateDiscount ? `Desconto nas diárias: ${money(state.lateDiscount)}` : '', $('#paymentNotes').value.trim()].filter(Boolean).join(' • '), amount: value / 100, paid_on: paidOn };
       const r = await companyApi('POST', `/contracts/${c.id}/${kind === 'rollover' ? 'rollover' : 'settle'}`, body);
       closeModal('paymentModal');
       toast(kind === 'rollover' ? `Rolagem registrada. Novo vencimento: ${brDate(r.new_due_date)}.` : `Contrato ${c.code} quitado.`, 'success');
@@ -1329,7 +1396,7 @@ function renderBank() {
   tbody.innerHTML = transactions.map(tx => {
     const credit = tx.amount_cents > 0;
     const done = tx.status === 'CONCILIADO';
-    const actions = credit ? ['ROLAR', 'QUITAR', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'] : ['DESEMBOLSO', 'DESPESA'];
+    const actions = credit ? ['ROLAR', 'QUITAR', 'AMORTIZACAO', 'PARCELA_ACORDO', 'OUTRA_ENTRADA'] : ['DESEMBOLSO', 'DESPESA'];
 
     let contractCell;
     if (done) {
@@ -1390,7 +1457,7 @@ async function validateTx(id, button) {
   const action = $(`[data-tx-action="${id}"]`).value;
   const contractId = Number($(`[data-tx-contract="${id}"]`).value) || null;
   if (!action) return toast('Escolha a natureza da transação.', 'warning');
-  if ((action === 'ROLAR' || action === 'QUITAR' || action === 'PARCELA_ACORDO') && !contractId) return toast('Vincule um contrato.', 'warning');
+  if ((action === 'ROLAR' || action === 'QUITAR' || action === 'PARCELA_ACORDO' || action === 'AMORTIZACAO') && !contractId) return toast('Vincule um contrato.', 'warning');
   if (action === 'PARCELA_ACORDO') {
     const c = state.contracts.find(x => x.id === contractId);
     const ni = c && c.agreement && c.agreement.next_installment;
@@ -1661,6 +1728,8 @@ document.addEventListener('click', e => {
     case 'payment': return openPayment(id);
     case 'do-rollover': return doPayment('rollover', el);
     case 'do-settle': return doPayment('settle', el);
+    case 'do-amortize': return doAmortize(el);
+    case 'late-discount': return state.paymentDebt && applyLateDiscount(state.paymentDebt.lateFee * Number(el.dataset.pct) / 100);
     case 'open-agreement': return state.paymentContract && openAgreementModal(state.paymentContract, false);
     case 'renegotiate': return state.dossierContract && openAgreementModal(state.dossierContract, true);
     case 'regen-installments': return generateInstallments();

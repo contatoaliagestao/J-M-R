@@ -82,7 +82,11 @@ body { background-color: #dde3ec; color: #e2e8f0; font-family: 'Inter', sans-ser
 .modal-box {
   background: #1d2840; border: 1px solid #2b3953; border-radius: 16px; width: 100%;
   padding: 24px; box-shadow: 0 25px 50px -12px rgba(0,0,0,.5);
+  /* Janelas maiores que a tela rolam por dentro */
+  max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain;
 }
+.modal-box::-webkit-scrollbar { width: 8px; }
+.modal-box::-webkit-scrollbar-thumb { background: #3d4c67; border-radius: 8px; }
 .modal-box > * + * { margin-top: 20px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #2b3953; gap: 12px; }
 
@@ -142,3 +146,7 @@ body { background-color: #dde3ec; color: #e2e8f0; font-family: 'Inter', sans-ser
   /* Botões maiores para o dedo */
   .modal-box button[type=submit], .modal-box .btn-secondary { min-height: 46px; font-size: 14px; }
 }
+
+/* Botões de desconto nas diárias */
+.ld-btn { padding: 8px 6px; border-radius: 10px; font-size: 11px; font-weight: 700; background: #24314a; color: #cbd5e1; border: 1px solid #3d4c67; }
+.ld-btn.active { background: rgba(245, 158, 11, .18); color: #fcd34d; border-color: rgba(245, 158, 11, .6); }

@@ -585,6 +585,21 @@
       <div id="paymentSummary" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs"></div>
       <div class="space-y-4 text-xs">
         <div>
+          <div id="lateDiscountBox" class="hidden mb-4 bg-slate-950 border border-amber-500/30 rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="field-label mb-0"><i class="fa-solid fa-tags text-amber-400 mr-1"></i>Desconto nas diárias</span>
+              <span id="lateDiscountInfo" class="text-[11px] font-mono text-slate-400"></span>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <button type="button" data-action="late-discount" data-pct="0" class="ld-btn">Sem desconto</button>
+              <button type="button" data-action="late-discount" data-pct="50" class="ld-btn">50% das diárias</button>
+              <button type="button" data-action="late-discount" data-pct="100" class="ld-btn">Isentar diárias</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-slate-400 whitespace-nowrap">Outro valor de desconto (R$):</span>
+              <input id="lateDiscountValue" type="number" inputmode="decimal" step="0.01" min="0" class="field-input font-mono py-1.5">
+            </div>
+          </div>
           <label class="field-label">Data do recebimento:</label>
           <input id="payDate" type="date" class="field-input font-mono mb-1">
           <p id="payDateHint" class="text-[10px] text-slate-400 mb-3">Se o cliente pagou em outro dia, altere a data: as diárias são recalculadas até ela.</p>
@@ -619,7 +634,17 @@
             </button>
           </div>
         </div>
-        <p class="text-[10px] text-slate-400">Negociou desconto (por exemplo, nas diárias)? Altere o valor recebido antes de confirmar. O desconto fica registrado no histórico do cliente.</p>
+        <p class="text-[10px] text-slate-400">Negociou desconto? Use "Desconto nas diárias" acima ou altere o valor recebido antes de confirmar. O desconto fica registrado no histórico do cliente.</p>
+        <div class="space-y-2 bg-slate-950 border border-sky-500/30 rounded-xl p-3">
+          <div class="flex items-center justify-between gap-2">
+            <label class="field-label mb-0"><i class="fa-solid fa-scissors text-sky-400 mr-1"></i>Quebrar juros (cliente antecipa parte do principal)</label>
+          </div>
+          <input id="payAmortizeAmount" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="Valor antecipado (R$)" class="field-input font-mono">
+          <div id="payAmortizePreview" class="text-[11px] font-mono text-slate-400 min-h-[16px]">O valor é abatido do principal; os juros diminuem. O vencimento não muda.</div>
+          <button data-action="do-amortize" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold p-3 rounded-xl flex flex-col items-center">
+            <span class="text-xs">Quebrar Juros</span><span class="text-[10px] text-sky-100 mt-0.5">Abate o valor do principal</span>
+          </button>
+        </div>
         <button data-action="open-agreement" class="w-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold p-3 rounded-xl flex flex-col items-center">
           <span class="text-xs"><i class="fa-solid fa-handshake mr-1"></i>Fazer Acordo</span>
           <span class="text-[10px] text-amber-200/70 mt-0.5">Cliente não consegue pagar: negociar valor e parcelas</span>

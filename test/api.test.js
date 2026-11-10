@@ -523,9 +523,8 @@ test('data do recebimento: diárias e novo vencimento calculados na data informa
   const due = ct.due_date;
   assert.strictEqual(ct.debt.overdueDays, 5);
 
-  // Datas inválidas
-  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, 1) })).status, 400);
-  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, -40) })).status, 400);
+  // Data em formato inválido é recusada (a data em si é livre)
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: '14/10/2026' })).status, 400);
 
   // Pagou 2 dias depois do vencimento (e só foi lançado hoje): diárias de 2 dias, novo vencimento = data do pagamento + 30
   const paidOn = addDaysIso(due, 2);
@@ -555,4 +554,18 @@ test('data do recebimento: diárias e novo vencimento calculados na data informa
   assert.strictEqual((await admin('POST', `${base}/agreements/${a.id}/installments/${a.installments[0].id}/pay`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, -2) })).status, 200);
   const a2 = (await admin('GET', `${base}/contracts/${ct3.id}`)).data.contract.agreement;
   assert.strictEqual(a2.installments[0].paid_at, addDaysIso(today, -2));
+});
+
+test('data do recebimento livre: aceita data futura e anterior à concessão', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const today = todayIso();
+  const novo = async nome => (await admin('POST', `${base}/contracts`, {
+    client_name: nome, cpf: '4', phone: '11933334444', address: 'Rua I', principal: 200, rate: 10, cycle_days: 30, start_date: addDaysIso(today, -5),
+  })).data.contract;
+  const a = await novo('Data Futura');
+  assert.strictEqual((await admin('POST', `${base}/contracts/${a.id}/rollover`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, 3) })).status, 200);
+  const b = await novo('Data Antes Concessao');
+  assert.strictEqual((await admin('POST', `${base}/contracts/${b.id}/settle`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, -30) })).status, 200);
+  const d = (await admin('GET', `${base}/contracts/${b.id}`)).data;
+  assert.strictEqual(d.contract.settled_at, addDaysIso(today, -30));
 });

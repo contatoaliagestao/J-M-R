@@ -730,20 +730,16 @@ function paymentInput(b) {
   if (!channel) throw new HttpError(400, 'Escolha o método de baixa.');
   // Valor recebido é opcional: se não vier, usa o valor cheio calculado pelo sistema
   const amount_cents = b.amount === undefined || b.amount === null || b.amount === '' ? undefined : moneyToCents(b.amount, 'Valor recebido');
-  // Data do recebimento: opcional (padrão = hoje); não pode ser no futuro
+  // Data do recebimento: opcional (padrão = hoje) e livre — qualquer data válida
   const today = finance.todayIso();
   let paid_on = today;
   if (b.paid_on !== undefined && b.paid_on !== null && b.paid_on !== '') {
     if (!finance.isValidIsoDate(b.paid_on)) throw new HttpError(400, 'Data do recebimento inválida.');
-    if (b.paid_on > today) throw new HttpError(400, 'A data do recebimento não pode ser no futuro.');
     paid_on = b.paid_on;
   }
   return { channel, notes: str(b.notes, { field: 'Observações', max: 300 }), amount_cents, paid_on };
 }
 
-function checkPaidOn(paidOn, ct) {
-  if (paidOn < ct.start_date) throw new HttpError(400, `A data do recebimento não pode ser anterior à concessão (${brDate(ct.start_date)}).`);
-}
 
 // Texto do histórico quando o valor recebido difere do calculado
 function differenceText(paid, expected) {
@@ -803,7 +799,6 @@ company.post('/contracts/:id/rollover', managerOnly, async c => {
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  checkPaidOn(paid_on, ct);
   // Diárias e novo vencimento são calculados na data em que o cliente pagou
   const { newDue, stmts } = rolloverStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), today: paid_on, label: 'Rolagem (baixa manual)' });
   await atomic(db, stmts, CONFLICT_MSG);
@@ -816,7 +811,6 @@ company.post('/contracts/:id/settle', managerOnly, async c => {
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  checkPaidOn(paid_on, ct);
   await atomic(db, settleStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), today: paid_on, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
   return c.json({ ok: true });
 });
@@ -947,7 +941,6 @@ company.post('/agreements/:aid/installments/:iid/pay', managerOnly, async c => {
   const paid = b.amount === undefined || b.amount === '' ? inst.amount_cents : moneyToCents(b.amount, 'Valor recebido');
   const { channel, notes, paid_on } = paymentInput(b);
   const ct = await getContract(db, cid, a.contract_id);
-  checkPaidOn(paid_on, ct);
   await atomic(db, payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date: paid_on, user: c.get('user'), label: 'Parcela de acordo recebida' }),
     'Esta parcela já foi registrada por outra pessoa. Atualize a página e confira.');
   const after = await db.prepare('SELECT status FROM agreements WHERE id = ?').bind(a.id).first();

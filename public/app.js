@@ -835,8 +835,6 @@ function openPayment(id) {
   $('#paymentSub').textContent = `${c.client_name} (${c.code})`;
   $('#paymentNotes').value = '';
   $('#payDate').value = state.today;
-  $('#payDate').max = state.today;
-  $('#payDate').min = c.start_date;
   setPaymentDate(state.today);
   openModal('paymentModal');
 }
@@ -872,10 +870,15 @@ $('#payDate').addEventListener('change', e => {
   const c = state.paymentContract;
   let v = e.target.value;
   if (!v) return;
-  if (v > state.today) { toast('A data do recebimento não pode ser no futuro.', 'warning'); v = state.today; e.target.value = v; }
-  if (v < c.start_date) { toast('A data não pode ser anterior à concessão do empréstimo.', 'warning'); v = c.start_date; e.target.value = v; }
   setPaymentDate(v);
 });
+
+// Aviso (não bloqueia) quando a data do recebimento parece fora do comum
+function paidOnWarning(iso, startDate) {
+  if (iso > state.today) return `\n\nAtenção: a data do recebimento (${brDate(iso)}) é uma data FUTURA.`;
+  if (startDate && iso < startDate) return `\n\nAtenção: a data do recebimento (${brDate(iso)}) é anterior à concessão do empréstimo (${brDate(startDate)}).`;
+  return '';
+}
 
 const paymentAmountCents = kind => Math.round((Number($(kind === 'rollover' ? '#payRolloverAmount' : '#paySettleAmount').value) || 0) * 100);
 
@@ -911,7 +914,7 @@ async function doPayment(kind, button) {
     : `Confirmar QUITAÇÃO do contrato ${c.code}, recebendo ${money(value)}${paidOn !== state.today ? ` em ${brDate(paidOn)}` : ''}?`) +
     (diff > 0 ? `\n\nDesconto concedido: ${money(diff)} (valor cheio: ${money(full)}).` : '') +
     (diff < 0 ? `\n\nAtenção: ${money(-diff)} a mais que o valor calculado (${money(full)}).` : '');
-  if (!confirm(question)) return;
+  if (!confirm(question + paidOnWarning(paidOn, c.start_date))) return;
   await withBusy(button, async () => {
     try {
       const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, amount: value / 100, paid_on: paidOn };
@@ -1060,7 +1063,6 @@ function openInstallmentPay(agreementId, installmentId) {
   f.reset();
   f.amount.value = centsToInput(inst.amount_cents);
   f.paid_on.value = state.today;
-  f.paid_on.max = state.today;
   $('#installmentPaySub').textContent = `${c.client_name} — parcela ${inst.number}/${c.agreement.installments_count}, vencimento ${brDate(inst.due_date)}`;
   openModal('installmentPayModal');
 }
@@ -1068,6 +1070,8 @@ function openInstallmentPay(agreementId, installmentId) {
 $('#installmentPayForm').addEventListener('submit', async e => {
   e.preventDefault();
   const f = formData(e.target);
+  const warn = paidOnWarning(f.paid_on, state.dossierContract && state.dossierContract.start_date);
+  if (warn && !confirm('Confirmar o recebimento desta parcela?' + warn)) return;
   await withBusy(e.target.querySelector('[type=submit]'), async () => {
     try {
       const r = await companyApi('POST', `/agreements/${installmentPayState.agreementId}/installments/${installmentPayState.installmentId}/pay`,

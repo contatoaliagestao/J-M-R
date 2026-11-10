@@ -957,6 +957,7 @@ async function openDossier(id) {
       <div><span class="text-slate-400 text-[11px]">Vencimento</span><div class="font-mono font-bold text-slate-300">${c.status === 'QUITADO' ? 'Quitado em ' + brDate(c.settled_at) : (c.in_agreement ? 'Em acordo' : brDate(c.due_date))}</div></div>
       <div><span class="text-slate-400 text-[11px]">${c.in_agreement ? 'Saldo do acordo' : 'Total p/ quitar'}</span><div class="font-mono font-bold ${c.in_agreement ? 'text-amber-400' : 'text-emerald-400'}">${c.status === 'QUITADO' ? '—' : money(c.in_agreement && c.agreement ? c.agreement.remaining_cents : c.debt.totalToSettle)}</div></div>`;
     renderDossierAgreement(c, history || []);
+    $('#dossierDanger').classList.toggle('hidden', !isManager());
     $('#occurrenceInput').value = '';
     $('#occurrencesList').innerHTML = occurrences.length ? occurrences.map(o => {
       const color = o.author_role === 'SISTEMA' ? 'bg-slate-700 text-slate-300' : (o.author_role === 'OPERADOR' ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400');
@@ -1023,6 +1024,23 @@ function renderDossierAgreement(c, history) {
   }
   box.innerHTML = html;
   box.classList.remove('hidden');
+}
+
+async function deleteContract(button) {
+  const c = state.dossierContract;
+  if (!c) return;
+  const reason = prompt(`Excluir o contrato ${c.code} de ${c.client_name}?\n\nEssa ação não pode ser desfeita. Informe o motivo da exclusão:`);
+  if (reason === null) return;
+  if (!reason.trim()) return toast('Informe o motivo para excluir.', 'warning');
+  if (!confirm(`Confirma a EXCLUSÃO do contrato ${c.code} (${c.client_name})?`)) return;
+  await withBusy(button, async () => {
+    try {
+      await companyApi('DELETE', `/contracts/${c.id}`, { reason: reason.trim() });
+      closeModal('dossierModal');
+      toast(`Contrato ${c.code} excluído.`, 'success');
+      refresh();
+    } catch (err) { handleError(err); }
+  });
 }
 
 async function addOccurrence(button) {
@@ -1433,6 +1451,7 @@ document.addEventListener('click', e => {
     case 'remove-installment': agreementState.rows.splice(id, 1); return renderInstallmentsEditor();
     case 'pay-installment': return openInstallmentPay(Number(el.dataset.agreement), id);
     case 'cancel-agreement': return cancelAgreement(id);
+    case 'delete-contract': return deleteContract(el);
     case 'copy-agreement-debt': {
       const c = state.contracts.find(x => x.id === id);
       return c && c.agreement && copyText(agreementDebtText(c), `Cobrança do acordo de ${c.client_name} copiada.`);

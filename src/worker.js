@@ -608,6 +608,37 @@ company.get('/contracts/:id', async c => {
   });
 });
 
+// Excluir contrato (Gestor/Administrador). Só é permitido se o contrato não tem nenhum recebimento,
+// para não apagar receita nem caixa já registrados. Fica um registro da exclusão.
+const RECEIPT_TYPES_SQL = "('ROLAGEM','QUITACAO','PARCELA_ACORDO','OUTRA_ENTRADA')";
+
+company.delete('/contracts/:id', managerOnly, async c => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const ct = await getContract(db, c.get('company').id, c.req.param('id'));
+  const reason = str((await readJson(c)).reason, { field: 'Motivo', required: true, max: 300 });
+  const receipts = await db.prepare(`SELECT COUNT(*) AS n FROM ledger WHERE contract_id = ? AND type IN ${RECEIPT_TYPES_SQL}`).bind(ct.id).first();
+  if (receipts.n > 0) {
+    throw new HttpError(400, 'Este contrato já tem recebimentos (rolagem, quitação ou parcela de acordo) e não pode ser excluído, para não apagar valores do caixa.');
+  }
+  await atomic(db, [
+    // 1º: registra a exclusão, mas só se, neste instante, ainda não houver recebimento (outra pessoa pode ter dado baixa agora)
+    db.prepare(`INSERT INTO deleted_contracts (company_id, contract_code, client_name, cpf, principal_cents, data_json, reason, deleted_by, deleted_by_name)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM ledger WHERE contract_id = ? AND type IN ${RECEIPT_TYPES_SQL})`)
+      .bind(ct.company_id, ct.code, ct.client_name, ct.cpf, ct.principal_cents, JSON.stringify(ct), reason, user.id, user.name, ct.id),
+    guard(db),
+    // Lançamentos de extrato vinculados (ex.: desembolso confirmado) ficam no extrato, só perdem o vínculo
+    db.prepare('UPDATE bank_transactions SET contract_id = NULL WHERE contract_id = ?').bind(ct.id),
+    db.prepare('DELETE FROM ledger WHERE contract_id = ?').bind(ct.id),
+    db.prepare('DELETE FROM agreement_installments WHERE agreement_id IN (SELECT id FROM agreements WHERE contract_id = ?)').bind(ct.id),
+    db.prepare('DELETE FROM agreements WHERE contract_id = ?').bind(ct.id),
+    db.prepare('DELETE FROM occurrences WHERE contract_id = ?').bind(ct.id),
+    db.prepare('DELETE FROM contracts WHERE id = ?').bind(ct.id),
+    guard(db),
+  ], 'Este contrato recebeu um pagamento agora há pouco e não pode mais ser excluído. Atualize a página.');
+  return c.json({ ok: true });
+});
+
 company.post('/contracts/:id/occurrences', async c => {
   const db = c.get('db');
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));

@@ -386,3 +386,46 @@ test('acordo: parcela vencida vai para a cobrança; acordo sem pagamento pode se
   assert.strictEqual(after.situation, 'ATRASADO');
   assert.strictEqual(after.agreement, null);
 });
+
+test('excluir contrato: gestor exclui; operador não; bloqueado se houver recebimento', async () => {
+  const base = `/api/companies/${empresa2}`;
+  const today = todayIso();
+  const g = client();
+  assert.strictEqual((await g('POST', '/api/login', { login: 'renata.gestora', password: 'senha-renata-1' })).status, 200);
+  await admin('POST', '/api/users', { name: 'Op Dois', username: 'op.dois', password: 'senha-op-dois', role: 'OPERADOR', company_ids: [empresa2] });
+  const op = client();
+  assert.strictEqual((await op('POST', '/api/login', { login: 'op.dois', password: 'senha-op-dois' })).status, 200);
+
+  const novo = async (nome, extra = {}) => (await g('POST', `${base}/contracts`, {
+    client_name: nome, cpf: '1', phone: '11900001111', address: 'Rua X', principal: 500, rate: 10, cycle_days: 30, ...extra,
+  })).data.contract;
+  const dashBefore = (await g('GET', `${base}/dashboard`)).data.dashboard;
+
+  // Lançado por engano: gestor exclui (motivo obrigatório); operador não pode
+  const errado = await novo('Lancado Por Engano');
+  assert.strictEqual((await op('DELETE', `${base}/contracts/${errado.id}`, { reason: 'teste' })).status, 403);
+  assert.strictEqual((await g('DELETE', `${base}/contracts/${errado.id}`, {})).status, 400);
+  assert.strictEqual((await g('DELETE', `${base}/contracts/${errado.id}`, { reason: 'Valor digitado errado' })).status, 200);
+  assert.strictEqual((await g('GET', `${base}/contracts/${errado.id}`)).status, 404);
+  const dashAfter = (await g('GET', `${base}/dashboard`)).data.dashboard;
+  assert.strictEqual(dashAfter.capital_alocado_cents, dashBefore.capital_alocado_cents);
+
+  // Com recebimento (rolagem): não pode excluir
+  const pago = await novo('Ja Pagou Juros');
+  assert.strictEqual((await g('POST', `${base}/contracts/${pago.id}/rollover`, { channel: 'DINHEIRO' })).status, 200);
+  const r = await g('DELETE', `${base}/contracts/${pago.id}`, { reason: 'teste' });
+  assert.strictEqual(r.status, 400);
+  assert.match(r.data.error, /recebimentos/);
+
+  // Com acordo ainda sem pagamento: pode excluir (acordo e parcelas vão junto)
+  const ac = await novo('Acordo Sem Pagamento', { start_date: addDaysIso(today, -40) });
+  assert.strictEqual((await g('POST', `${base}/contracts/${ac.id}/agreement`, { total: 600, installments: [{ due_date: today, amount: 600 }] })).status, 201);
+  assert.strictEqual((await g('DELETE', `${base}/contracts/${ac.id}`, { reason: 'Cadastro duplicado' })).status, 200);
+  assert.strictEqual((await g('GET', `${base}/dashboard`)).data.dashboard.acordos.ativos, dashBefore.acordos.ativos);
+
+  // Gestor não exclui contrato de empresa que não é dele
+  const outro = (await admin('POST', `/api/companies/${empresa1}/contracts`, {
+    client_name: 'Outra Empresa', cpf: '1', phone: '11900001111', address: 'Rua Y', principal: 100, rate: 10, cycle_days: 30,
+  })).data.contract;
+  assert.strictEqual((await g('DELETE', `/api/companies/${empresa1}/contracts/${outro.id}`, { reason: 'x' })).status, 403);
+});

@@ -1044,7 +1044,10 @@ async function openDossier(id) {
         <a href="${esc(whatsappLink(c.phone))}" target="_blank" rel="noopener" class="text-emerald-400 hover:text-emerald-300 ml-1" title="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a></div>
       <div><span class="text-slate-500 text-[10px] uppercase font-bold block">Endereço</span><span class="text-slate-300"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${esc(c.address)}</span></div>
       <div><span class="text-slate-500 text-[10px] uppercase font-bold block">Rede social</span><span class="text-blue-400">${esc(c.social_media || 'Não informada')}</span></div>
-      <div class="sm:col-span-2 pt-1"><button data-action="loan-for-client" class="w-full sm:w-auto theme-accent-bg font-bold px-4 py-2.5 rounded-xl text-xs"><i class="fa-solid fa-plus mr-1"></i>Novo empréstimo para este cliente</button></div>`;
+      <div class="sm:col-span-2 pt-1 flex flex-col sm:flex-row gap-2">
+        <button data-action="loan-for-client" class="w-full sm:w-auto theme-accent-bg font-bold px-4 py-2.5 rounded-xl text-xs"><i class="fa-solid fa-plus mr-1"></i>Novo empréstimo para este cliente</button>
+        ${isAdmin() ? '<button data-action="edit-contract" class="w-full sm:w-auto bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs border border-slate-700"><i class="fa-solid fa-pen-to-square mr-1"></i>Editar contrato</button>' : ''}
+      </div>`;
     $('#dossierDebt').innerHTML = `
       <div><span class="text-slate-400 text-[11px]">Principal / taxa</span><div class="font-mono font-bold text-white">${money(c.principal_cents)} (${c.rate}% / ${c.cycle_days}d)</div></div>
       <div><span class="text-slate-400 text-[11px]">Situação</span><div class="mt-0.5">${statusBadge(c)}</div></div>
@@ -1119,6 +1122,57 @@ function renderDossierAgreement(c, history) {
   box.innerHTML = html;
   box.classList.remove('hidden');
 }
+
+function openContractEdit() {
+  const c = state.dossierContract;
+  if (!c) return;
+  const f = $('#contractEditForm');
+  f.reset();
+  $('#contractEditSub').textContent = `${c.code} — ${c.client_name}`;
+  f.client_name.value = c.client_name;
+  f.cpf.value = c.cpf;
+  f.phone.value = formatPhone(c.phone);
+  f.address.value = c.address;
+  f.social_media.value = c.social_media || '';
+  f.principal.value = (c.principal_cents / 100).toFixed(2);
+  f.rate.value = c.rate;
+  f.late_fee_rate.value = c.late_fee_rate;
+  f.cycle_days.value = c.cycle_days;
+  f.start_date.value = c.start_date;
+  f.due_date.value = c.due_date;
+  const locked = c.status !== 'ATIVO' ? 'Contrato quitado: as condições do empréstimo não podem mais ser alteradas.'
+    : (c.in_agreement ? 'Contrato em acordo: as condições ficam por conta do acordo. Para mudar valores, use "Renegociar" na ficha.' : '');
+  $('#contractEditFinancial').disabled = !!locked;
+  $('#contractEditFinancial').classList.toggle('opacity-40', !!locked);
+  $('#contractEditLocked').textContent = locked;
+  $('#contractEditLocked').classList.toggle('hidden', !locked);
+  openModal('contractEditModal');
+}
+
+$('#contractEditForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const c = state.dossierContract;
+  const f = e.target;
+  const body = {
+    client_name: f.client_name.value.trim(), cpf: f.cpf.value.trim(), phone: f.phone.value.trim(),
+    address: f.address.value.trim(), social_media: f.social_media.value.trim(),
+  };
+  if (!$('#contractEditFinancial').disabled) {
+    Object.assign(body, {
+      principal: Number(f.principal.value), rate: Number(f.rate.value), late_fee_rate: Number(f.late_fee_rate.value),
+      cycle_days: Number(f.cycle_days.value), start_date: f.start_date.value, due_date: f.due_date.value,
+    });
+  }
+  await withBusy(f.querySelector('[type=submit]'), async () => {
+    try {
+      const r = await companyApi('PUT', `/contracts/${c.id}`, body);
+      closeModal('contractEditModal');
+      toast(r.changed ? 'Contrato atualizado. A alteração ficou registrada no histórico.' : 'Nada foi alterado.', r.changed ? 'success' : 'info');
+      await refresh();
+      openDossier(c.id);
+    } catch (err) { handleError(err); }
+  });
+});
 
 async function deleteContract(button) {
   const c = state.dossierContract;
@@ -1555,6 +1609,7 @@ document.addEventListener('click', e => {
     case 'pay-installment': return openInstallmentPay(Number(el.dataset.agreement), id);
     case 'cancel-agreement': return cancelAgreement(id);
     case 'delete-contract': return deleteContract(el);
+    case 'edit-contract': return openContractEdit();
     case 'copy-agreement-debt': {
       const c = state.contracts.find(x => x.id === id);
       return c && c.agreement && copyText(agreementDebtText(c), `Cobrança do acordo de ${c.client_name} copiada.`);

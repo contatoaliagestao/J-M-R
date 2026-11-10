@@ -608,6 +608,84 @@ company.get('/contracts/:id', async c => {
   });
 });
 
+// Editar contrato (somente Administrador).
+// Dados do cliente: sempre. Condições financeiras: só com o contrato ativo e fora de acordo.
+// Toda alteração fica registrada no histórico (antes → depois).
+company.put('/contracts/:id', requireAdmin, async c => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const ct = await getContract(db, c.get('company').id, c.req.param('id'));
+  const b = await readJson(c);
+
+  const next = {};
+  if (b.client_name !== undefined) next.client_name = str(b.client_name, { field: 'Nome do cliente', required: true, max: 120 });
+  if (b.cpf !== undefined) next.cpf = str(b.cpf, { field: 'CPF', required: true, max: 20 });
+  if (b.phone !== undefined) {
+    next.phone = str(b.phone, { field: 'WhatsApp', required: true, max: 30 }).replace(/\D/g, '');
+    if (next.phone.length < 10) throw new HttpError(400, 'WhatsApp inválido: informe DDD + número.');
+  }
+  if (b.address !== undefined) next.address = str(b.address, { field: 'Endereço', required: true, max: 250 });
+  if (b.social_media !== undefined) next.social_media = str(b.social_media, { field: 'Rede social', max: 120 });
+
+  const financial = {};
+  if (b.principal !== undefined) financial.principal_cents = moneyToCents(b.principal, 'Valor principal');
+  if (b.rate !== undefined) financial.rate = percent(b.rate, 'Taxa de juros');
+  if (b.late_fee_rate !== undefined) financial.late_fee_rate = percent(b.late_fee_rate, 'Diária de atraso', { max: 100 });
+  if (b.cycle_days !== undefined) {
+    financial.cycle_days = Number(b.cycle_days);
+    if (!Number.isInteger(financial.cycle_days) || financial.cycle_days < 1 || financial.cycle_days > 365) throw new HttpError(400, 'Ciclo inválido.');
+  }
+  if (b.start_date !== undefined) {
+    if (!finance.isValidIsoDate(b.start_date)) throw new HttpError(400, 'Data de concessão inválida.');
+    financial.start_date = b.start_date;
+  }
+  if (b.due_date !== undefined) {
+    if (!finance.isValidIsoDate(b.due_date)) throw new HttpError(400, 'Vencimento inválido.');
+    financial.due_date = b.due_date;
+  }
+  // Só considera o que realmente mudou
+  for (const k of Object.keys(financial)) if (financial[k] === ct[k]) delete financial[k];
+  for (const k of Object.keys(next)) if (next[k] === ct[k]) delete next[k];
+
+  if (Object.keys(financial).length) {
+    if (ct.status !== 'ATIVO') throw new HttpError(400, 'Contrato quitado: só os dados do cliente podem ser editados.');
+    if (ct.in_agreement) throw new HttpError(400, 'Contrato em acordo: só os dados do cliente podem ser editados. Para mudar valores, renegocie o acordo.');
+  }
+  const changes = { ...next, ...financial };
+  const keys = Object.keys(changes);
+  if (!keys.length) return c.json({ ok: true, changed: 0 });
+
+  const LABELS = {
+    client_name: 'Nome', cpf: 'CPF', phone: 'WhatsApp', address: 'Endereço', social_media: 'Rede social',
+    principal_cents: 'Principal', rate: 'Juros (%)', late_fee_rate: 'Diária (%)', cycle_days: 'Ciclo (dias)',
+    start_date: 'Data de concessão', due_date: 'Vencimento',
+  };
+  const fmt = (k, v) => {
+    if (k === 'principal_cents') return brl(v);
+    if (k === 'start_date' || k === 'due_date') return brDate(v);
+    return v === '' || v == null ? '(vazio)' : String(v);
+  };
+  const summary = keys.map(k => `${LABELS[k]}: ${fmt(k, ct[k])} → ${fmt(k, changes[k])}`).join('; ');
+
+  const stmts = [
+    // Só aplica se o contrato não mudou desde que foi lido (ex.: uma baixa feita agora por outra pessoa)
+    db.prepare(`UPDATE contracts SET ${keys.map(k => `${k} = ?`).join(', ')}
+      WHERE id = ? AND status = ? AND in_agreement = ? AND due_date = ? AND rollover_count = ?`)
+      .bind(...keys.map(k => changes[k]), ct.id, ct.status, ct.in_agreement, ct.due_date, ct.rollover_count),
+    guard(db),
+  ];
+  // Mantém o lançamento de concessão coerente com o novo principal / data
+  if (financial.principal_cents !== undefined || financial.start_date !== undefined || next.client_name !== undefined) {
+    stmts.push(db.prepare(`UPDATE ledger SET amount_cents = -?, principal_cents = ?, date = ?, description = ?
+      WHERE contract_id = ? AND type = 'CONCESSAO'`)
+      .bind(financial.principal_cents ?? ct.principal_cents, financial.principal_cents ?? ct.principal_cents,
+        financial.start_date ?? ct.start_date, `Concessão ${ct.code} (${next.client_name ?? ct.client_name})`, ct.id));
+  }
+  stmts.push(occurrenceStmt(db, ct.id, null, `Contrato editado por ${user.name}. ${summary}.`));
+  await atomic(db, stmts, 'Este contrato foi alterado por outra pessoa enquanto você editava. Atualize a página e tente de novo.');
+  return c.json({ ok: true, changed: keys.length });
+});
+
 // Excluir contrato (Gestor/Administrador). Só é permitido se o contrato não tem nenhum recebimento,
 // para não apagar receita nem caixa já registrados. Fica um registro da exclusão.
 const RECEIPT_TYPES_SQL = "('ROLAGEM','QUITACAO','PARCELA_ACORDO','OUTRA_ENTRADA')";

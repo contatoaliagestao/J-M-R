@@ -528,6 +528,50 @@
     </div>
   </div>
 
+  <!-- Editar contrato (administrador) -->
+  <div id="contractEditModal" class="modal hidden">
+    <div class="modal-box max-w-lg">
+      <div class="modal-head">
+        <div>
+          <h3 class="text-sm font-bold text-white"><i class="fa-solid fa-pen-to-square theme-accent-text mr-2"></i>Editar contrato</h3>
+          <p id="contractEditSub" class="text-xs text-slate-400"></p>
+        </div>
+        <button data-close class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <form id="contractEditForm" class="space-y-4 text-xs">
+        <p class="text-[11px] font-bold uppercase tracking-widest theme-accent-text">Dados do cliente</p>
+        <div><label class="field-label">Nome completo *</label><input name="client_name" required maxlength="120" class="field-input"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="field-label">CPF *</label><input name="cpf" required maxlength="20" inputmode="numeric" class="field-input font-mono"></div>
+          <div><label class="field-label">WhatsApp *</label><input name="phone" type="tel" required maxlength="30" class="field-input font-mono"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="field-label">Endereço *</label><input name="address" required maxlength="250" class="field-input"></div>
+          <div><label class="field-label">Rede social</label><input name="social_media" maxlength="120" class="field-input"></div>
+        </div>
+        <p class="text-[11px] font-bold uppercase tracking-widest theme-accent-text pt-2">Condições do empréstimo</p>
+        <div id="contractEditLocked" class="hidden rounded-xl px-3 py-2 bg-slate-950 border border-slate-700 text-slate-300"></div>
+        <fieldset id="contractEditFinancial" class="space-y-4">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="col-span-2 sm:col-span-1"><label class="field-label">Principal (R$)</label><input name="principal" type="number" inputmode="decimal" step="0.01" min="1" class="field-input font-mono"></div>
+            <div><label class="field-label">Juros (%)</label><input name="rate" type="number" inputmode="decimal" step="0.01" min="0" class="field-input font-mono"></div>
+            <div><label class="field-label">Diária (%)</label><input name="late_fee_rate" type="number" inputmode="decimal" step="0.01" min="0" max="100" class="field-input font-mono"></div>
+            <div><label class="field-label">Ciclo (dias)</label><input name="cycle_days" type="number" inputmode="numeric" min="1" max="365" class="field-input font-mono"></div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="field-label">Data de concessão</label><input name="start_date" type="date" class="field-input font-mono"></div>
+            <div><label class="field-label">Vencimento atual</label><input name="due_date" type="date" class="field-input font-mono"></div>
+          </div>
+          <p class="text-[10px] text-slate-400">Mudar a data de concessão não muda o vencimento sozinho: ajuste o vencimento atual se precisar. Juros e diárias passam a ser calculados com os novos valores; recebimentos já registrados não mudam.</p>
+        </fieldset>
+        <div class="flex justify-end space-x-3 pt-2 border-t border-slate-800">
+          <button type="button" data-close class="btn-secondary">Cancelar</button>
+          <button type="submit" class="px-5 py-2 theme-accent-bg font-bold rounded-xl">Salvar alterações</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Baixa manual -->
   <div id="paymentModal" class="modal hidden">
     <div class="modal-box max-w-lg">

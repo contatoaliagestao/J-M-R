@@ -429,3 +429,47 @@ test('excluir contrato: gestor exclui; operador não; bloqueado se houver recebi
   })).data.contract;
   assert.strictEqual((await g('DELETE', `/api/companies/${empresa1}/contracts/${outro.id}`, { reason: 'x' })).status, 403);
 });
+
+test('editar contrato: só administrador; dados do cliente sempre; condições só em contrato ativo fora de acordo', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const today = todayIso();
+  const ct = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Nome Errado', cpf: '111', phone: '11900000000', address: 'Rua Velha', principal: 1000, rate: 20, cycle_days: 30, start_date: today,
+  })).data.contract;
+  const dashBefore = (await admin('GET', `${base}/dashboard`)).data.dashboard;
+
+  // Gestor não edita
+  const g = client();
+  await g('POST', '/api/login', { login: 'renata.gestora', password: 'senha-renata-1' });
+  await admin('PUT', '/api/users/' + (await admin('GET', '/api/users')).data.users.find(u => u.username === 'renata.gestora').id, { company_ids: [empresa1, empresa2] });
+  assert.strictEqual((await g('PUT', `${base}/contracts/${ct.id}`, { client_name: 'X' })).status, 403);
+
+  // Admin corrige cliente e condições
+  const r = await admin('PUT', `${base}/contracts/${ct.id}`, {
+    client_name: 'Nome Certo', phone: '(11) 98888-7777', address: 'Rua Nova, 10', principal: 1500, rate: 15, due_date: addDaysIso(today, 20),
+  });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.data.changed, 6);
+  const d = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  assert.strictEqual(d.contract.client_name, 'Nome Certo');
+  assert.strictEqual(d.contract.phone, '11988887777');
+  assert.strictEqual(d.contract.principal_cents, 150000);
+  assert.strictEqual(d.contract.debt.cycleInterest, 22500);
+  assert.strictEqual(d.contract.due_date, addDaysIso(today, 20));
+  assert.ok(d.occurrences.some(o => /Contrato editado/.test(o.text) && /Principal: R\$\s?1\.000,00 → R\$\s?1\.500,00/.test(o.text)));
+  // Lançamento de concessão acompanha o novo principal
+  assert.strictEqual(d.payments.find(p => p.type === 'CONCESSAO').amount_cents, -150000);
+  const dashAfter = (await admin('GET', `${base}/dashboard`)).data.dashboard;
+  assert.strictEqual(dashAfter.capital_alocado_cents - dashBefore.capital_alocado_cents, 50000);
+
+  // Salvar sem mudanças
+  assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { client_name: 'Nome Certo' })).data.changed, 0);
+  // Dados inválidos
+  assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { due_date: '31/12/2026' })).status, 400);
+
+  // Em acordo: só dados do cliente
+  await admin('PUT', `${base}/contracts/${ct.id}`, { due_date: addDaysIso(today, -5) });
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/agreement`, { total: 1700, installments: [{ due_date: today, amount: 1700 }] })).status, 201);
+  assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { rate: 10 })).status, 400);
+  assert.strictEqual((await admin('PUT', `${base}/contracts/${ct.id}`, { address: 'Rua Mais Nova' })).status, 200);
+});

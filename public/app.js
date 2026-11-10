@@ -834,18 +834,48 @@ function openPayment(id) {
   state.paymentContract = c;
   $('#paymentSub').textContent = `${c.client_name} (${c.code})`;
   $('#paymentNotes').value = '';
-  $('#paymentSummary').innerHTML = `
-    <div class="flex justify-between text-slate-400"><span>Principal:</span><span class="font-mono text-white">${money(c.debt.principal)}</span></div>
-    <div class="flex justify-between text-slate-400"><span>Juros do ciclo:</span><span class="font-mono text-emerald-400">${money(c.debt.cycleInterest)}</span></div>
-    <div class="flex justify-between text-slate-400"><span>Dias em atraso:</span><span class="font-mono text-amber-400 font-bold">${c.debt.overdueDays} dias</span></div>
-    <div class="flex justify-between text-slate-400"><span>Diárias (${c.late_fee_rate}%/dia):</span><span class="font-mono text-red-400 font-bold">${money(c.debt.lateFee)}</span></div>
-    <div class="pt-2 border-t border-slate-800 flex justify-between text-sm font-bold"><span class="text-white">Total para quitação:</span><span class="font-mono text-emerald-400">${money(c.debt.totalToSettle)}</span></div>
-    <div class="flex justify-between font-semibold text-slate-300"><span>Total para rolar (juros + diárias):</span><span class="font-mono text-teal-400">${money(c.debt.totalToRollover)}</span></div>`;
-  $('#payRolloverAmount').value = (c.debt.totalToRollover / 100).toFixed(2);
-  $('#paySettleAmount').value = (c.debt.totalToSettle / 100).toFixed(2);
-  updatePaymentDiscounts();
+  $('#payDate').value = state.today;
+  $('#payDate').max = state.today;
+  $('#payDate').min = c.start_date;
+  setPaymentDate(state.today);
   openModal('paymentModal');
 }
+
+// Calcula a dívida numa data (mesma regra do servidor): diárias contam até o dia do pagamento
+function debtOn(c, iso) {
+  const d = c.debt;
+  const days = c.status === 'ATIVO' && !c.in_agreement
+    ? Math.max(0, Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(c.due_date + 'T00:00:00Z')) / 864e5)) : 0;
+  const lateFee = days * d.dailyFee;
+  return { ...d, overdueDays: days, lateFee, totalToRollover: d.cycleInterest + lateFee, totalToSettle: d.initialTotal + lateFee };
+}
+
+function setPaymentDate(iso) {
+  const c = state.paymentContract;
+  const d = debtOn(c, iso);
+  state.paymentDebt = d;
+  const other = iso !== state.today;
+  $('#paymentSummary').innerHTML = `
+    ${other ? `<div class="text-[11px] text-amber-300 font-semibold pb-1"><i class="fa-regular fa-calendar mr-1"></i>Valores calculados para ${brDate(iso)}</div>` : ''}
+    <div class="flex justify-between text-slate-400"><span>Principal:</span><span class="font-mono text-white">${money(d.principal)}</span></div>
+    <div class="flex justify-between text-slate-400"><span>Juros do ciclo:</span><span class="font-mono text-emerald-400">${money(d.cycleInterest)}</span></div>
+    <div class="flex justify-between text-slate-400"><span>Dias em atraso:</span><span class="font-mono text-amber-400 font-bold">${d.overdueDays} dias</span></div>
+    <div class="flex justify-between text-slate-400"><span>Diárias (${c.late_fee_rate}%/dia):</span><span class="font-mono text-red-400 font-bold">${money(d.lateFee)}</span></div>
+    <div class="pt-2 border-t border-slate-800 flex justify-between text-sm font-bold"><span class="text-white">Total para quitação:</span><span class="font-mono text-emerald-400">${money(d.totalToSettle)}</span></div>
+    <div class="flex justify-between font-semibold text-slate-300"><span>Total para rolar (juros + diárias):</span><span class="font-mono text-teal-400">${money(d.totalToRollover)}</span></div>`;
+  $('#payRolloverAmount').value = (d.totalToRollover / 100).toFixed(2);
+  $('#paySettleAmount').value = (d.totalToSettle / 100).toFixed(2);
+  updatePaymentDiscounts();
+}
+
+$('#payDate').addEventListener('change', e => {
+  const c = state.paymentContract;
+  let v = e.target.value;
+  if (!v) return;
+  if (v > state.today) { toast('A data do recebimento não pode ser no futuro.', 'warning'); v = state.today; e.target.value = v; }
+  if (v < c.start_date) { toast('A data não pode ser anterior à concessão do empréstimo.', 'warning'); v = c.start_date; e.target.value = v; }
+  setPaymentDate(v);
+});
 
 const paymentAmountCents = kind => Math.round((Number($(kind === 'rollover' ? '#payRolloverAmount' : '#paySettleAmount').value) || 0) * 100);
 
@@ -853,7 +883,8 @@ const paymentAmountCents = kind => Math.round((Number($(kind === 'rollover' ? '#
 function updatePaymentDiscounts() {
   const c = state.paymentContract;
   if (!c) return;
-  [['rollover', c.debt.totalToRollover, '#payRolloverDiscount'], ['settle', c.debt.totalToSettle, '#paySettleDiscount']].forEach(([kind, full, sel]) => {
+  const d = state.paymentDebt || c.debt;
+  [['rollover', d.totalToRollover, '#payRolloverDiscount'], ['settle', d.totalToSettle, '#paySettleDiscount']].forEach(([kind, full, sel]) => {
     const paid = paymentAmountCents(kind);
     const el = $(sel);
     if (!paid) { el.className = 'text-[11px] font-mono min-h-[16px] text-red-400'; el.textContent = 'Informe o valor recebido.'; return; }
@@ -869,19 +900,21 @@ $('#paySettleAmount').addEventListener('input', updatePaymentDiscounts);
 async function doPayment(kind, button) {
   const c = state.paymentContract;
   if (!c) return;
-  const full = kind === 'rollover' ? c.debt.totalToRollover : c.debt.totalToSettle;
+  const d = state.paymentDebt || c.debt;
+  const full = kind === 'rollover' ? d.totalToRollover : d.totalToSettle;
+  const paidOn = $('#payDate').value || state.today;
   const value = paymentAmountCents(kind);
   if (value <= 0) return toast('Informe o valor recebido.', 'warning');
   const diff = full - value;
   const question = (kind === 'rollover'
-    ? `Confirmar ROLAGEM do contrato ${c.code}, recebendo ${money(value)}?`
-    : `Confirmar QUITAÇÃO do contrato ${c.code}, recebendo ${money(value)}?`) +
+    ? `Confirmar ROLAGEM do contrato ${c.code}, recebendo ${money(value)}${paidOn !== state.today ? ` em ${brDate(paidOn)}` : ''}?`
+    : `Confirmar QUITAÇÃO do contrato ${c.code}, recebendo ${money(value)}${paidOn !== state.today ? ` em ${brDate(paidOn)}` : ''}?`) +
     (diff > 0 ? `\n\nDesconto concedido: ${money(diff)} (valor cheio: ${money(full)}).` : '') +
     (diff < 0 ? `\n\nAtenção: ${money(-diff)} a mais que o valor calculado (${money(full)}).` : '');
   if (!confirm(question)) return;
   await withBusy(button, async () => {
     try {
-      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, amount: value / 100 };
+      const body = { channel: $('input[name=paymentChannel]:checked').value, notes: $('#paymentNotes').value, amount: value / 100, paid_on: paidOn };
       const r = await companyApi('POST', `/contracts/${c.id}/${kind === 'rollover' ? 'rollover' : 'settle'}`, body);
       closeModal('paymentModal');
       toast(kind === 'rollover' ? `Rolagem registrada. Novo vencimento: ${brDate(r.new_due_date)}.` : `Contrato ${c.code} quitado.`, 'success');
@@ -1026,6 +1059,8 @@ function openInstallmentPay(agreementId, installmentId) {
   const f = $('#installmentPayForm');
   f.reset();
   f.amount.value = centsToInput(inst.amount_cents);
+  f.paid_on.value = state.today;
+  f.paid_on.max = state.today;
   $('#installmentPaySub').textContent = `${c.client_name} — parcela ${inst.number}/${c.agreement.installments_count}, vencimento ${brDate(inst.due_date)}`;
   openModal('installmentPayModal');
 }
@@ -1036,7 +1071,7 @@ $('#installmentPayForm').addEventListener('submit', async e => {
   await withBusy(e.target.querySelector('[type=submit]'), async () => {
     try {
       const r = await companyApi('POST', `/agreements/${installmentPayState.agreementId}/installments/${installmentPayState.installmentId}/pay`,
-        { amount: Number(f.amount), channel: f.channel, notes: f.notes });
+        { amount: Number(f.amount), channel: f.channel, notes: f.notes, paid_on: f.paid_on });
       closeModal('installmentPayModal');
       toast(r.concluded ? 'Última parcela recebida: acordo concluído e contrato quitado!' : 'Parcela recebida.', 'success');
       await refresh();

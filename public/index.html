@@ -585,6 +585,9 @@
       <div id="paymentSummary" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs"></div>
       <div class="space-y-4 text-xs">
         <div>
+          <label class="field-label">Data do recebimento:</label>
+          <input id="payDate" type="date" class="field-input font-mono mb-1">
+          <p id="payDateHint" class="text-[10px] text-slate-400 mb-3">Se o cliente pagou em outro dia, altere a data: as diárias são recalculadas até ela.</p>
           <label class="field-label">Método de baixa:</label>
           <div class="grid grid-cols-2 gap-3">
             <label class="flex items-center space-x-2 bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer">
@@ -690,7 +693,10 @@
         <button data-close class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
       </div>
       <form id="installmentPayForm" class="space-y-4 text-xs">
-        <div><label class="field-label">Valor recebido (R$)</label><input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required class="field-input font-mono"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="field-label">Valor recebido (R$)</label><input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required class="field-input font-mono"></div>
+          <div><label class="field-label">Data do recebimento</label><input name="paid_on" type="date" required class="field-input font-mono"></div>
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="flex items-center space-x-2 bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer"><input type="radio" name="channel" value="DINHEIRO" checked><span class="font-bold text-white">Dinheiro</span></label>
           <label class="flex items-center space-x-2 bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer"><input type="radio" name="channel" value="PIX_MANUAL"><span class="font-bold text-white">Pix / Transf.</span></label>

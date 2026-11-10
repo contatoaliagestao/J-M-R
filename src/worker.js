@@ -730,7 +730,19 @@ function paymentInput(b) {
   if (!channel) throw new HttpError(400, 'Escolha o método de baixa.');
   // Valor recebido é opcional: se não vier, usa o valor cheio calculado pelo sistema
   const amount_cents = b.amount === undefined || b.amount === null || b.amount === '' ? undefined : moneyToCents(b.amount, 'Valor recebido');
-  return { channel, notes: str(b.notes, { field: 'Observações', max: 300 }), amount_cents };
+  // Data do recebimento: opcional (padrão = hoje); não pode ser no futuro
+  const today = finance.todayIso();
+  let paid_on = today;
+  if (b.paid_on !== undefined && b.paid_on !== null && b.paid_on !== '') {
+    if (!finance.isValidIsoDate(b.paid_on)) throw new HttpError(400, 'Data do recebimento inválida.');
+    if (b.paid_on > today) throw new HttpError(400, 'A data do recebimento não pode ser no futuro.');
+    paid_on = b.paid_on;
+  }
+  return { channel, notes: str(b.notes, { field: 'Observações', max: 300 }), amount_cents, paid_on };
+}
+
+function checkPaidOn(paidOn, ct) {
+  if (paidOn < ct.start_date) throw new HttpError(400, `A data do recebimento não pode ser anterior à concessão (${brDate(ct.start_date)}).`);
 }
 
 // Texto do histórico quando o valor recebido difere do calculado
@@ -756,7 +768,7 @@ function rolloverStmts(db, ct, { amount_cents, channel, notes, date, user, today
         VALUES (?, ?, ?, 'ROLAGEM', ?, ?, ?, ?, ?, ?)`)
         .bind(ct.company_id, ct.id, date, `Rolagem ${ct.code} (${ct.client_name})`, paid, paid, channel, notes, user.id),
       occurrenceStmt(db, ct.id, null,
-        `${label} por ${user.name}: recebido ${brl(paid)} (${channel}). Novo vencimento: ${brDate(newDue)}.` +
+        `${label} por ${user.name}: recebido ${brl(paid)} (${channel})${date !== finance.todayIso() ? ` em ${brDate(date)}` : ''}. Novo vencimento: ${brDate(newDue)}.` +
         differenceText(paid, debt.totalToRollover) +
         (notes ? ` Obs.: ${notes}` : '')),
     ],
@@ -776,7 +788,7 @@ function settleStmts(db, ct, { amount_cents, channel, notes, date, user, today, 
       VALUES (?, ?, ?, 'QUITACAO', ?, ?, ?, ?, ?, ?, ?)`)
       .bind(ct.company_id, ct.id, date, `Quitação ${ct.code} (${ct.client_name})`, paid, principalPart, paid - principalPart, channel, notes, user.id),
     occurrenceStmt(db, ct.id, null,
-      `${label} por ${user.name}: recebido ${brl(paid)} (${channel}). Contrato QUITADO.` +
+      `${label} por ${user.name}: recebido ${brl(paid)} (${channel})${date !== finance.todayIso() ? ` em ${brDate(date)}` : ''}. Contrato QUITADO.` +
       differenceText(paid, debt.totalToSettle) +
       (notes ? ` Obs.: ${notes}` : '')),
   ];
@@ -787,24 +799,25 @@ const CONFLICT_MSG = 'Este contrato foi alterado por outra pessoa ou já está q
 
 company.post('/contracts/:id/rollover', managerOnly, async c => {
   const db = c.get('db');
-  const { channel, notes, amount_cents } = paymentInput(await readJson(c));
-  const today = finance.todayIso();
+  const { channel, notes, amount_cents, paid_on } = paymentInput(await readJson(c));
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  const { newDue, stmts } = rolloverStmts(db, ct, { amount_cents, channel, notes, date: today, user: c.get('user'), today, label: 'Rolagem (baixa manual)' });
+  checkPaidOn(paid_on, ct);
+  // Diárias e novo vencimento são calculados na data em que o cliente pagou
+  const { newDue, stmts } = rolloverStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), today: paid_on, label: 'Rolagem (baixa manual)' });
   await atomic(db, stmts, CONFLICT_MSG);
   return c.json({ ok: true, new_due_date: newDue });
 });
 
 company.post('/contracts/:id/settle', managerOnly, async c => {
   const db = c.get('db');
-  const { channel, notes, amount_cents } = paymentInput(await readJson(c));
-  const today = finance.todayIso();
+  const { channel, notes, amount_cents, paid_on } = paymentInput(await readJson(c));
   const ct = await getContract(db, c.get('company').id, c.req.param('id'));
   if (ct.status !== 'ATIVO') throw new HttpError(400, 'Este contrato já está quitado.');
   if (ct.in_agreement) throw new HttpError(400, IN_AGREEMENT_MSG);
-  await atomic(db, settleStmts(db, ct, { amount_cents, channel, notes, date: today, user: c.get('user'), today, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
+  checkPaidOn(paid_on, ct);
+  await atomic(db, settleStmts(db, ct, { amount_cents, channel, notes, date: paid_on, user: c.get('user'), today: paid_on, label: 'Quitação (baixa manual)' }), CONFLICT_MSG);
   return c.json({ ok: true });
 });
 
@@ -911,7 +924,7 @@ function payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date, user
       SELECT ?3, ?4, ?2, ?5, 'PARCELA_ACORDO', ?6, ?1, x.p, ?1 - x.p, ?7, ?8, ?9 FROM x`)
       .bind(paid, a.id, a.company_id, ct.id, date, `Parcela ${inst.number} do acordo ${ct.code} (${ct.client_name})`, channel, notes, user.id),
     occurrenceStmt(db, ct.id, null,
-      `${label} por ${user.name}: parcela ${inst.number} (vencimento ${brDate(inst.due_date)}), recebido ${brl(paid)} (${channel}).` +
+      `${label} por ${user.name}: parcela ${inst.number} (vencimento ${brDate(inst.due_date)}), recebido ${brl(paid)} (${channel})${date !== finance.todayIso() ? ` em ${brDate(date)}` : ''}.` +
       (diff !== 0 ? ` Atenção: valor da parcela era ${brl(inst.amount_cents)}.` : '') + (notes ? ` Obs.: ${notes}` : '')),
     db.prepare(`UPDATE agreements SET status = 'CONCLUIDO', closed_at = ? WHERE id = ? AND status = 'ATIVO'
       AND NOT EXISTS (SELECT 1 FROM agreement_installments WHERE agreement_id = ? AND status = 'PENDENTE')`).bind(date, a.id, a.id),
@@ -932,10 +945,10 @@ company.post('/agreements/:aid/installments/:iid/pay', managerOnly, async c => {
   if (!inst) throw new HttpError(404, 'Parcela não encontrada.');
   if (inst.status !== 'PENDENTE') throw new HttpError(400, 'Esta parcela já foi paga.');
   const paid = b.amount === undefined || b.amount === '' ? inst.amount_cents : moneyToCents(b.amount, 'Valor recebido');
-  const { channel, notes } = paymentInput(b);
+  const { channel, notes, paid_on } = paymentInput(b);
   const ct = await getContract(db, cid, a.contract_id);
-  const today = finance.todayIso();
-  await atomic(db, payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date: today, user: c.get('user'), label: 'Parcela de acordo recebida' }),
+  checkPaidOn(paid_on, ct);
+  await atomic(db, payInstallmentStmts(db, a, ct, inst, { paid, channel, notes, date: paid_on, user: c.get('user'), label: 'Parcela de acordo recebida' }),
     'Esta parcela já foi registrada por outra pessoa. Atualize a página e confira.');
   const after = await db.prepare('SELECT status FROM agreements WHERE id = ?').bind(a.id).first();
   return c.json({ ok: true, concluded: after.status === 'CONCLUIDO' });

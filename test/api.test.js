@@ -511,3 +511,48 @@ test('baixa com desconto: valor recebido editável na rolagem e na quitação', 
   const d2 = (await admin('GET', `${base}/contracts/${ct2.id}`)).data;
   assert.strictEqual(d2.payments.find(p => p.type === 'ROLAGEM').amount_cents, 5000);
 });
+
+test('data do recebimento: diárias e novo vencimento calculados na data informada', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const today = todayIso();
+  // R$ 1.000 a 20%, venceu há 5 dias (diária = R$ 120)
+  const ct = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Pagou Antes', cpf: '7', phone: '11922223333', address: 'Rua F', principal: 1000, rate: 20, cycle_days: 30,
+    start_date: addDaysIso(today, -35),
+  })).data.contract;
+  const due = ct.due_date;
+  assert.strictEqual(ct.debt.overdueDays, 5);
+
+  // Datas inválidas
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, 1) })).status, 400);
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, -40) })).status, 400);
+
+  // Pagou 2 dias depois do vencimento (e só foi lançado hoje): diárias de 2 dias, novo vencimento = data do pagamento + 30
+  const paidOn = addDaysIso(due, 2);
+  const r = await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO', paid_on: paidOn });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.data.new_due_date, addDaysIso(paidOn, 30));
+  const d = (await admin('GET', `${base}/contracts/${ct.id}`)).data;
+  const roll = d.payments.find(p => p.type === 'ROLAGEM');
+  assert.strictEqual(roll.amount_cents, 20000 + 2 * 12000);
+  assert.strictEqual(roll.date, paidOn);
+  assert.ok(d.occurrences.some(o => o.text.includes(`em ${paidOn.split('-').reverse().join('/')}`)));
+
+  // Quitação com data anterior
+  const ct2 = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Quitou Ontem', cpf: '6', phone: '11922224444', address: 'Rua G', principal: 500, rate: 10, cycle_days: 30, start_date: addDaysIso(today, -10),
+  })).data.contract;
+  assert.strictEqual((await admin('POST', `${base}/contracts/${ct2.id}/settle`, { channel: 'PIX_MANUAL', paid_on: addDaysIso(today, -1) })).status, 200);
+  const d2 = (await admin('GET', `${base}/contracts/${ct2.id}`)).data;
+  assert.strictEqual(d2.contract.settled_at, addDaysIso(today, -1));
+
+  // Parcela de acordo com data anterior
+  const ct3 = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Parcela Ontem', cpf: '5', phone: '11922225555', address: 'Rua H', principal: 500, rate: 10, cycle_days: 30, start_date: addDaysIso(today, -40),
+  })).data.contract;
+  await admin('POST', `${base}/contracts/${ct3.id}/agreement`, { total: 600, installments: [{ due_date: addDaysIso(today, -2), amount: 300 }, { due_date: addDaysIso(today, 10), amount: 300 }] });
+  const a = (await admin('GET', `${base}/contracts/${ct3.id}`)).data.contract.agreement;
+  assert.strictEqual((await admin('POST', `${base}/agreements/${a.id}/installments/${a.installments[0].id}/pay`, { channel: 'DINHEIRO', paid_on: addDaysIso(today, -2) })).status, 200);
+  const a2 = (await admin('GET', `${base}/contracts/${ct3.id}`)).data.contract.agreement;
+  assert.strictEqual(a2.installments[0].paid_at, addDaysIso(today, -2));
+});

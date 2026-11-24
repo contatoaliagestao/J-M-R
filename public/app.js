@@ -15,6 +15,7 @@ const PAGE_HEADERS = {
   dash: { title: 'Dashboard', subtitle: 'INDICADORES GERAIS & HORIZONTE DE RECEBÍVEIS' },
   contratos: { title: 'Contratos', subtitle: 'GESTÃO DE CARTEIRA & CICLOS DE JUROS' },
   cobranca: { title: 'Cobrança & Atrasos', subtitle: 'PAINEL DE INADIMPLÊNCIA & DIÁRIAS' },
+  historico: { title: 'Histórico', subtitle: 'CONTRATOS QUITADOS • SOMENTE CONSULTA' },
   conciliacao: { title: 'Conciliação Bancária (OFX)', subtitle: 'EXTRATO BANCÁRIO & VALIDAÇÃO MANUAL' },
 };
 const ACTION_LABELS = {
@@ -441,6 +442,7 @@ async function loadContracts() {
   state.today = data.today;
   renderContracts();
   renderOverdue();
+  renderHistory();
 }
 
 function statusBadge(c) {
@@ -460,7 +462,8 @@ function renderContracts() {
   const status = $('#filterStatus').value;
   const digits = term.replace(/\D/g, '');
 
-  const list = state.contracts.filter(c => {
+  const open = state.contracts.filter(c => c.situation !== 'QUITADO');
+  const list = open.filter(c => {
     const matchesTerm = !term
       || c.client_name.toLowerCase().includes(term)
       || c.code.toLowerCase().includes(term)
@@ -472,10 +475,11 @@ function renderContracts() {
       && (status === 'ALL' || c.situation === status);
   });
 
-  renderContractCards(list);
+  renderContractCards(list, open.length);
+  $('#contractsCount').textContent = `${list.length} contrato${list.length === 1 ? '' : 's'} em andamento${list.length !== open.length ? ` (de ${open.length})` : ''}`;
   const tbody = $('#contractsTableBody');
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-slate-500">${state.contracts.length ? 'Nenhum contrato encontrado com esses filtros.' : 'Nenhum contrato cadastrado nesta empresa ainda.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-slate-500">${open.length ? 'Nenhum contrato encontrado com esses filtros.' : 'Nenhum contrato em andamento nesta empresa.'}</td></tr>`;
     return;
   }
 
@@ -508,10 +512,10 @@ function renderContracts() {
 }
 
 // Cartões de contrato para o celular (mesmos dados da tabela, em formato fácil de tocar)
-function renderContractCards(list) {
+function renderContractCards(list, openCount = list.length) {
   const box = $('#contractsCards');
   if (!list.length) {
-    box.innerHTML = `<div class="panel p-6 text-center text-slate-400 text-sm">${state.contracts.length ? 'Nenhum contrato encontrado.' : 'Nenhum contrato cadastrado ainda.<br>Toque em <b>+</b> para lançar o primeiro.'}</div>`;
+    box.innerHTML = `<div class="panel p-6 text-center text-slate-400 text-sm">${openCount ? 'Nenhum contrato encontrado.' : 'Nenhum contrato em andamento.<br>Toque em <b>+</b> para lançar um novo.'}</div>`;
     return;
   }
   box.innerHTML = list.map(c => {
@@ -557,6 +561,54 @@ function renderContractCards(list) {
     </div>`;
   }).join('');
 }
+
+// ===================== HISTÓRICO (QUITADOS) =====================
+function renderHistory() {
+  const all = state.contracts.filter(c => c.situation === 'QUITADO');
+  $('#historyLinkCount').textContent = all.length;
+  $('#historyBadge').textContent = all.length;
+  $('#historyBadge').classList.toggle('hidden', !all.length);
+  const term = normalizeText($('#searchHistory').value);
+  const digits = digitsOnly($('#searchHistory').value);
+  const list = all.filter(c => !term
+      || normalizeText(c.client_name).includes(term) || c.code.toLowerCase().includes(term)
+      || (digits.length >= 3 && digitsOnly(c.cpf).includes(digits)))
+    .sort((a, b) => String(b.settled_at || '').localeCompare(String(a.settled_at || '')));
+  $('#histCount').textContent = list.length;
+  $('#histReceived').textContent = money(list.reduce((t, c) => t + (c.received_cents || 0), 0));
+  $('#histRevenue').textContent = money(list.reduce((t, c) => t + (c.revenue_cents || 0), 0));
+
+  const empty = all.length ? 'Nenhum contrato quitado encontrado com essa busca.' : 'Nenhum contrato quitado ainda.';
+  $('#historyTableBody').innerHTML = list.length ? list.map(c => `
+    <tr class="hover:bg-slate-800/40">
+      <td class="py-3 px-4">
+        <button data-action="dossier" data-id="${c.id}" class="font-bold text-white hover:underline text-left">${esc(c.client_name)}</button>
+        <div class="text-[11px] text-slate-500"><span class="font-mono theme-accent-text font-semibold">${esc(c.code)}</span> • CPF: ${esc(c.cpf)}</div>
+      </td>
+      <td class="py-3 px-4 font-mono text-slate-300">${brDate(c.start_date)}</td>
+      <td class="py-3 px-4 font-mono text-slate-300">${c.settled_at ? brDate(c.settled_at) : '—'}</td>
+      <td class="py-3 px-4 font-mono text-slate-200">${money(c.principal_cents)}</td>
+      <td class="py-3 px-4 font-mono font-bold text-emerald-400">${money(c.received_cents || 0)}</td>
+      <td class="py-3 px-4 font-mono font-bold ${(c.revenue_cents || 0) > 0 ? 'text-amber-400' : 'text-slate-400'}">${money(c.revenue_cents || 0)}</td>
+      <td class="py-3 px-4 text-center"><button data-action="dossier" data-id="${c.id}" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold"><i class="fa-solid fa-folder-open text-[11px] mr-1"></i>Ficha</button></td>
+    </tr>`).join('') : `<tr><td colspan="7" class="text-center py-10 text-slate-500">${empty}</td></tr>`;
+
+  $('#historyCards').innerHTML = list.length ? list.map(c => `
+    <button data-action="dossier" data-id="${c.id}" class="ccard w-full text-left">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="text-[15px] font-bold text-white truncate">${esc(c.client_name)}</div>
+          <div class="text-[11px] text-slate-400"><span class="font-mono theme-accent-text font-semibold">${esc(c.code)}</span> • ${money(c.principal_cents)}</div>
+        </div>
+        <span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-300 font-bold border border-slate-700 whitespace-nowrap">Quitado</span>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
+        <div><span class="text-slate-400 text-[10px] uppercase block">Concessão → Quitação</span><span class="font-mono text-slate-200">${brDate(c.start_date)} → ${c.settled_at ? brDate(c.settled_at) : '—'}</span></div>
+        <div class="text-right"><span class="text-slate-400 text-[10px] uppercase block">Recebido • Lucro</span><span class="font-mono text-emerald-400 font-bold">${money(c.received_cents || 0)}</span> <span class="font-mono text-amber-400">• ${money(c.revenue_cents || 0)}</span></div>
+      </div>
+    </button>`).join('') : `<div class="panel p-6 text-center text-slate-400 text-sm">${empty}</div>`;
+}
+$('#searchHistory').addEventListener('input', renderHistory);
 
 // Linha de contrato em acordo: mostra a próxima parcela e o saldo do acordo
 function agreementRow(c) {

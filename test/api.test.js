@@ -620,3 +620,16 @@ test('quebrar juros: abate o principal, reduz os juros e mantém o vencimento', 
   assert.strictEqual((await admin('POST', `${base}/bank/${tx.id}/validate`, { action: 'AMORTIZACAO', contract_id: ct2.id })).status, 200);
   assert.strictEqual((await admin('GET', `${base}/contracts/${ct2.id}`)).data.contract.principal_cents, 70000);
 });
+
+test('lista de contratos traz total recebido e lucro de cada contrato (para o histórico)', async () => {
+  const base = `/api/companies/${empresa1}`;
+  const ct = (await admin('POST', `${base}/contracts`, {
+    client_name: 'Historico Lucro', cpf: '11', phone: '11955556666', address: 'Rua H', principal: 1000, rate: 20, cycle_days: 30,
+  })).data.contract;
+  await admin('POST', `${base}/contracts/${ct.id}/rollover`, { channel: 'DINHEIRO' });           // + R$ 200 (juros)
+  await admin('POST', `${base}/contracts/${ct.id}/settle`, { channel: 'DINHEIRO' });             // + R$ 1.200
+  const item = (await admin('GET', `${base}/contracts`)).data.contracts.find(x => x.id === ct.id);
+  assert.strictEqual(item.situation, 'QUITADO');
+  assert.strictEqual(item.received_cents, 140000);
+  assert.strictEqual(item.revenue_cents, 40000);
+});

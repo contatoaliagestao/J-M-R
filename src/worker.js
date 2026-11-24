@@ -548,9 +548,23 @@ company.get('/contracts', async c => {
   const today = finance.todayIso();
   const db = c.get('db');
   const cid = c.get('company').id;
-  const rows = (await db.prepare('SELECT * FROM contracts WHERE company_id = ? ORDER BY status, due_date').bind(cid).all()).results;
+  const [cr, lr] = await db.batch([
+    db.prepare('SELECT * FROM contracts WHERE company_id = ? ORDER BY status, due_date').bind(cid),
+    // Total recebido e lucro (juros + diárias) de cada contrato, para o histórico
+    db.prepare(`SELECT contract_id,
+        COALESCE(SUM(CASE WHEN type IN ('ROLAGEM','QUITACAO','PARCELA_ACORDO','AMORTIZACAO','OUTRA_ENTRADA') THEN amount_cents END), 0) AS received,
+        COALESCE(SUM(revenue_cents), 0) AS revenue
+      FROM ledger WHERE company_id = ? AND contract_id IS NOT NULL GROUP BY contract_id`).bind(cid),
+  ]);
+  const totals = new Map(lr.results.map(r => [r.contract_id, r]));
   const agr = await agreementSummaries(db, cid, today);
-  return c.json({ contracts: rows.map(x => contractView(x, today, agr.get(x.id) || null)), today });
+  return c.json({
+    contracts: cr.results.map(x => {
+      const t = totals.get(x.id);
+      return { ...contractView(x, today, agr.get(x.id) || null), received_cents: t ? t.received : 0, revenue_cents: t ? t.revenue : 0 };
+    }),
+    today,
+  });
 });
 
 company.post('/contracts', async c => { // Gestor e Operador podem lançar empréstimos

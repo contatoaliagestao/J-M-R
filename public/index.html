@@ -159,6 +159,10 @@
           <span><i class="fa-solid fa-triangle-exclamation"></i>Cobrança</span>
           <span id="overdueBadge" class="px-2 py-0.5 rounded-full text-[10px] bg-red-500 text-white font-bold hidden">0</span>
         </button>
+        <button data-tab="historico" class="sidebar-btn">
+          <span><i class="fa-solid fa-clock-rotate-left"></i>Histórico (quitados)</span>
+          <span id="historyBadge" class="px-2 py-0.5 rounded-full text-[10px] bg-slate-700 text-slate-200 font-bold hidden">0</span>
+        </button>
         <button data-tab="conciliacao" data-manager class="sidebar-btn">
           <span><i class="fa-solid fa-building-columns"></i>Conciliação OFX</span>
           <span id="pendingOfxBadge" class="px-1.5 py-0.5 rounded text-[10px] bg-teal-500/20 text-teal-300 font-bold hidden"></span>
@@ -354,9 +358,12 @@
                 <option value="EM_DIA">Em dia</option>
                 <option value="ATRASADO">Em atraso</option>
                 <option value="ACORDO">Em acordo</option>
-                <option value="QUITADO">Quitados</option>
               </select>
             </div>
+          </div>
+          <div class="flex items-center justify-between text-xs px-1 -mt-2">
+            <span id="contractsCount" class="text-slate-600 font-semibold"></span>
+            <button data-tab-link="historico" class="font-bold text-slate-700 hover:underline"><i class="fa-solid fa-clock-rotate-left mr-1"></i>Ver contratos quitados (<span id="historyLinkCount">0</span>)</button>
           </div>
           <div id="contractsCards" class="md:hidden space-y-3"></div>
           <div class="panel overflow-hidden hidden md:block">
@@ -375,6 +382,40 @@
                   </tr>
                 </thead>
                 <tbody id="contractsTableBody" class="divide-y divide-slate-800/60"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- HISTÓRICO (QUITADOS) -->
+        <section id="view-historico" class="hidden space-y-6">
+          <div class="panel p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+            <div class="relative flex-1">
+              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-500 text-xs"></i>
+              <input id="searchHistory" placeholder="Buscar quitado por cliente, CPF ou contrato..." class="field-input pl-9">
+            </div>
+            <div class="grid grid-cols-3 gap-3 text-center text-xs">
+              <div><span class="text-slate-400 block text-[10px] uppercase">Quitados</span><strong id="histCount" class="font-mono text-white text-sm">0</strong></div>
+              <div><span class="text-slate-400 block text-[10px] uppercase">Recebido</span><strong id="histReceived" class="font-mono text-emerald-400 text-sm">R$ 0,00</strong></div>
+              <div><span class="text-slate-400 block text-[10px] uppercase">Lucro</span><strong id="histRevenue" class="font-mono text-amber-400 text-sm">R$ 0,00</strong></div>
+            </div>
+          </div>
+          <div id="historyCards" class="md:hidden space-y-3"></div>
+          <div class="panel overflow-hidden hidden md:block">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="bg-slate-950/70 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
+                    <th class="py-3 px-4">Contrato / Cliente</th>
+                    <th class="py-3 px-4">Concessão</th>
+                    <th class="py-3 px-4">Quitação</th>
+                    <th class="py-3 px-4">Principal</th>
+                    <th class="py-3 px-4">Total recebido</th>
+                    <th class="py-3 px-4">Lucro (juros)</th>
+                    <th class="py-3 px-4 text-center">Consulta</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody" class="divide-y divide-slate-800/60"></tbody>
               </table>
             </div>
           </div>
@@ -474,6 +515,7 @@
         <button data-tab="dash" data-manager class="menu-item"><i class="fa-solid fa-chart-pie theme-accent-text"></i>Dashboard</button>
         <button data-tab="contratos" class="menu-item"><i class="fa-solid fa-file-invoice-dollar theme-accent-text"></i>Contratos</button>
         <button data-tab="cobranca" class="menu-item"><i class="fa-solid fa-triangle-exclamation theme-accent-text"></i>Cobrança</button>
+        <button data-tab="historico" class="menu-item"><i class="fa-solid fa-clock-rotate-left theme-accent-text"></i>Histórico (contratos quitados)</button>
         <button data-tab="conciliacao" data-manager class="menu-item"><i class="fa-solid fa-building-columns theme-accent-text"></i>Conciliação OFX</button>
         <button data-action="open-report" class="menu-item"><i class="fa-solid fa-print theme-accent-text"></i>Relatório de inadimplência</button>
         <button data-action="open-companies" data-admin class="menu-item"><i class="fa-solid fa-building text-amber-400"></i>Empresas</button>
